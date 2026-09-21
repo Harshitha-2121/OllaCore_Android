@@ -1,0 +1,172 @@
+OLLACORE API REPORT - ANDROID IMPLEMENTATION
+=============================================
+Generated: 2026-09-18
+Project  : Ollacore Android (WhatsApp-style on Ollacore backend)
+Base URL : https://api.ollacore.com/v1
+App ID   : da_3a0a2cfaabd34b7dbfb4ecd5033b0c5f
+Source   : android/app/src/main/java/com/ollacore/app/data/remote/OllacoreApi.kt
+Docs     : https://www.ollacore.com/docs (Directory/Chat/Calls/Push/Attachments/E2EE/WebSockets/API)
+Coverage : 104/104 = 100% (DOCUMENTATION-COVERAGE.md)
+QA       : 102/104 PASS (ANDROID-QA-REPORT.md)
+Pipeline : WhatsApp feature -> Desired Ollacore-style feature -> Does Ollacore API support it?
+            YES -> connect existing API -> Android UI -> functional test -> real-device test
+            NO  -> flag backend work required -> scope new API -> then UI -> testing
+Principle: WhatsApp-style, not copying WhatsApp proprietary internals; use Ollacore MLS/SFU.
+
+================================================================================
+CATEGORY 1 : YES - OLLACORE API SUPPORTS IT (connect existing API, then UI)
+================================================================================
+Total: 14 modules + sub-features. All endpoints already built in OllacoreApi.kt / WebSockets.
+
+1. DIRECTORY / IDENTITY (13/13 = 100%)
+---------------------------------------
+ POST   /v1/directory/otp/request               -> OllacoreApi.kt:45  requestOtp()         -> AuthViewModel.kt:62
+ POST   /v1/directory/otp/verify                -> OllacoreApi.kt:54  verifyOtp()          -> AuthViewModel.kt:82
+ GET    /v1/directory/me                        -> OllacoreApi.kt:65  getProfile()         -> ProfileScreen.kt:15
+ PATCH  /v1/directory/me                        -> OllacoreApi.kt:84  updateProfile()
+ POST   /v1/directory/contacts/lookup           -> OllacoreApi.kt:96  lookupContacts()     -> ContactsScreen.kt:19
+ POST   /v1/directory/conversations/direct      -> OllacoreApi.kt:117 openDirectConversation()
+ POST   /v1/directory/conversations/group       -> OllacoreApi.kt:127 createGroupConversation()
+ GET    /v1/directory/conversations             -> OllacoreApi.kt:108 listConversations()  -> HomeViewModel.kt
+ GET    /v1/directory/conversations/{id}/token  -> OllacoreApi.kt:137 getRoomToken(device_id)
+ GET    /v1/directory/inbox?limit=30            -> OllacoreApi.kt:146 getInbox()
+ POST   /v1/directory/devices                   -> OllacoreApi.kt:290 registerDevice()     -> OllacoreFirebaseMessagingService.kt
+ GET    /v1/directory/devices                   -> OllacoreApi.kt:300 listDevices()
+ DELETE /v1/directory/devices                   -> OllacoreApi.kt:309 deleteDevice()
+ Maps to WhatsApp modules: [1] Authentication, [21] Linked devices, [18] Contacts (lookup), [9] Groups create
+
+2. CHAT - CLIENT API + WEBSOCKET (15/15 = 100%)
+------------------------------------------------
+ GET    /v1/rooms/{id}/messages?limit&after_seq&before_seq -> listMessages() ChatRepository.kt / ChatViewModel.kt:214
+ POST   /v1/rooms/{id}/messages                    -> sendMessage() + WS message.send ChatWebSocket.kt:172 / OllacoreApi.kt:171
+ PATCH  /v1/rooms/{id}/messages/{mid}              -> editMessage() + WS message.edit ChatWebSocket.kt:185 / OllacoreApi.kt:182
+ DELETE /v1/rooms/{id}/messages/{mid}              -> deleteMessage() + WS message.delete ChatWebSocket.kt:193 / OllacoreApi.kt:193
+ GET    /v1/rooms/{id}/messages/search?q=&limit    -> searchMessages() SearchViewModel.kt / OllacoreApi.kt:321 / MainActivity.kt:154
+ POST   /v1/rooms/{id}/messages/{mid}/reactions    -> addReaction() + WS reaction.add ChatWebSocket.kt:200 / OllacoreApi.kt:202
+ DELETE /v1/rooms/{id}/messages/{mid}/reactions    -> removeReaction() + WS reaction.remove OllacoreApi.kt:212
+ POST   /v1/rooms/{id}/messages/{mid}/delivered    -> markDelivered() + WS receipt.delivered ChatWebSocket.kt:216 / OllacoreApi.kt:222
+ POST   /v1/rooms/{id}/messages/{mid}/read         -> markRead() + WS receipt.read ChatWebSocket.kt:223 / OllacoreApi.kt:231
+ GET    /v1/rooms/{id}/unread                      -> getUnread() OllacoreApi.kt:240
+ GET    /v1/rooms/{id}/participants                -> getParticipants() OllacoreApi.kt:249
+ WS typing.started / typing.stopped               -> ChatWebSocket.kt:230
+ WS presence.changed                              -> ChatWebSocket.kt:114 / ChatViewModel.kt:164
+ WS catchup + event_seq ordering                  -> ChatWebSocket.kt:238
+ WS ack/error/message.created/updated/deleted/reaction.added/removed/member.added/removed/resync/pong -> ChatWebSocket.kt:48
+ Maps to: [3] 1-to-1 Chat text/reply/edit/delete/react, [7] Message states, [8] Typing/presence, [10] Group replies/reactions, [23] Search
+
+3. AUDIO & VIDEO CALLS (10/10 = 100%) - RtcWebSocket.kt + CallViewModel.kt
+---------------------------------------------------------------------------
+ WS /v1/rtc/ws Sec-WebSocket-Protocol: chatbox, bearer.{token} -> RtcWebSocket.kt:15
+ cmd: offer (publish)           -> RtcWebSocket.kt:65 sendOffer() + CallViewModel.kt:166
+ cmd: answer (subscribe)        -> RtcWebSocket.kt:76 sendAnswer() + CallViewModel.kt:139
+ cmd: candidate (ICE)           -> RtcWebSocket.kt:85 sendCandidate()
+ cmd: leave                     -> RtcWebSocket.kt:97 leave() + CallViewModel.kt:214
+ SFU re-offer (server type:offer) -> RtcWebSocket.kt:44
+ WS call.started / call.ended   -> ChatWebSocket.kt:104
+ device_id in token (multi-device) -> OllacoreApi.kt:137
+ ice_servers[] from RoomTokenResponse -> Models.kt:127
+ Maps to: [11] Calls 1-to-1 voice/video, [12] Screen sharing API (getDisplayMedia+addTrack) -> CallViewModel.kt:208 (API YES, Android MediaProjection still mock TODO)
+
+4. PUSH & RINGING (5/5 = 100%)
+--------------------------------
+ POST/DELETE /v1/directory/devices (FCM register/unregister) -> OllacoreApi.kt:290,309
+ FirebaseMessagingService onMessageReceived -> OllacoreFirebaseMessagingService.kt
+ call.started -> push ringing -> ContentFreePushManager.kt handleCallNotification()
+ Content-free E2EE mode (hide body) -> ContentFreePushManager.kt + PushConfigManager.kt + E2eeConfig Models.kt:296
+ Channels: message_channel, message_channel_e2ee, call_channel -> ContentFreePushManager.kt
+ Foreground/background + tap routing open_chat -> OllacoreFirebaseMessagingService.kt
+ Maps to: [17] Notifications (message/group/call/background)
+
+5. ATTACHMENTS & MEDIA (10/10 = 100%)
+--------------------------------------
+ POST /v1/rooms/{id}/attachments/init                    -> OllacoreApi.kt:260 initAttachment()
+ PUT  presigned upload_url                                -> AttachmentUploader.kt
+ POST /v1/rooms/{id}/attachments/{id}/complete           -> OllacoreApi.kt:270 completeAttachment()
+ POST /v1/rooms/{id}/attachments/init-multipart          -> OllacoreApi.kt:332 initMultipartUpload() + AttachmentViewModel.kt
+ POST /v1/rooms/{id}/attachments/{id}/complete-multipart -> OllacoreApi.kt:342 completeMultipartUpload()
+ GET  /v1/rooms/{id}/attachments/{id}/download           -> OllacoreApi.kt:279 downloadAttachment()
+ WS attachment.ready / attachment.failed                 -> ChatWebSocket.kt:127
+ Coil image preview + UploadProgress 0-100%              -> ChatScreen.kt / UploadProgress.kt
+ MimeValidator magic bytes + blocked 18 types            -> MimeValidator.kt (35 tests)
+ Maps to: [4] Media camera/gallery/image/video/doc/audio (generic), [10] Group files/media
+
+6. END-TO-END ENCRYPTION (10/10 = 100%)
+----------------------------------------
+ POST /v1/e2ee/keys/upload              -> E2eeManager.kt:11 uploadDeviceKeys()
+ POST /v1/e2ee/keys/query               -> E2eeManager.kt:23 queryDeviceKeys()
+ POST /v1/e2ee/keys/claim               -> E2eeManager.kt:33 claimOneTimeKey()
+ POST /v1/e2ee/todevice                 -> E2eeManager.kt:43 sendToDeviceMessage()
+ GET  /v1/e2ee/todevice                 -> E2eeManager.kt:53 fetchPendingToDeviceMessages()
+ POST /v1/keypackages                   -> E2eeManager.kt:62 uploadKeyPackages()
+ GET  /v1/keypackages/count             -> E2eeManager.kt:72 getKeyPackageCount()
+ GET  /v1/rooms/{id}/keypackages/{principal} -> E2eeManager.kt:81 consumeKeyPackage()
+ device_id in token                     -> OllacoreApi.kt:137
+ Encrypted kinds: mls.commit/proposal/application/welcome -> MlsMessageHandler.kt + Models.kt:301
+ Forward secrecy epoch rotation         -> ForwardSecrecyManager.kt:94 + ChatViewModel.kt:334
+ Maps to: [20] Security E2EE
+
+7. WEBSOCKET PROTOCOL (25/25 = 100%)
+-------------------------------------
+ Chat WS auth: Sec-WebSocket-Protocol: chatbox, bearer.{token} ChatWebSocket.kt:24
+ Client->Server: message.send/edit/delete, receipt.delivered/read, reaction.add/remove, typing.started/stopped, catchup, ping
+ Server->Client: ack, error, message.created/updated/deleted, receipt.delivered/read, reaction.added/removed, member.added/removed, call.started/ended, presence.changed, attachment.ready/failed, resync, pong
+ RTC: offer/answer/candidate/leave
+
+8. MAPPING - YES MODULES (14) - NEXT: CONNECT API -> IMPLEMENT ANDROID UI -> TEST
+-----------------------------------------------------------------------------------
+ [ 1] Authentication (phone/OTP/session/logout/profile)       YES -> wiring exists, profile update no-op MainActivity.kt:189
+ [ 3] 1-to-1 Chat text/emoji/reply/edit/delete/react         YES core -> add forward/copy/select/star only
+ [ 4] Media camera/gallery/images/video/docs/audio           YES generic -> build picker + bubble render (MessageBubble:283 text-only now)
+ [ 7] Message states sending/sent/delivered/read/failed/retry YES receipts+ack -> add tick UI + retry
+ [ 8] Typing/presence online/offline                         YES -> add lastSeen header
+ [ 9] Groups create                                           YES -> add rename/icon/admin/add-remove/invite UI
+ [11] Calls 1-to-1 voice/video                                YES -> add group calls + mute/speaker/camera
+ [12] Screen sharing                                          YES API -> implement Android MediaProjection (currently mock CallViewModel.kt:208)
+ [17] Notifications                                            YES -> group by type
+ [18] Contacts search/add (lookup)                             YES -> wire onContactClick MainActivity.kt:205 (now no-op) + add block client
+ [20] Security E2EE                                            YES -> done
+ [21] Linked devices pair/manage/revoke                        YES -> build UI list/manage
+ [23] Search messages (room search)                            YES -> add global + media/doc filter
+ [24] Settings/Profile photo/name/about                        YES get/patch me -> add photo/about UI
+
+
+================================================================================
+CATEGORY 2 : NO - OLLACORE API DOES NOT SUPPORT IT (backend work required)
+================================================================================
+Total: 11 modules/sub-features. Flagged for backend scoping before Android UI. Do NOT copy WhatsApp proprietary implementation; design Ollacore-native APIs.
+
+ [ 2] Home Updates/Status tab                 NO -> part of [14] Status service. Inbox YES but Updates/Status has no API.
+ [ 5] Voice messages (record/pause/resume/send/playback/speed) NO specific kind -> Need backend: extend SendMessageRequest.kind=voice_note + duration/waveform metadata + attachment mime audio/ogg. Reuse attachments API but new kind.
+ [ 6] Video messages (short video note)       NO -> Need backend: kind=video_note + thumbnail/duration. Reuse attachments.
+ [10] Group polls / events                    NO -> Need backend: NEW POST /v1/rooms/{id}/polls + WS poll.created/vote/closed + events POST /v1/rooms/{id}/events. Largest file-sharing part YES via attachments.
+      Group mentions                         NO explicit -> Client parse @ + push; may need backend mention notify.
+ [13] Call history (incoming/outgoing/missed/detail/delete) NO -> Option A: NEW GET /v1/calls/history (backend) or Option B: Client-only Room DB (no backend). Recommend B first.
+ [14] Status (text/photo/video, viewers, privacy, reactions/replies) NO -> Need backend: NEW SERVICE /v1/status (24h TTL, viewers, privacy). No reuse. Biggest gap.
+ [15] Communities (community + groups + announcements) NO -> Need backend: NEW SERVICE /v1/communities + /v1/communities/{id}/groups + announcements (admin broadcast). Separate from groups.
+ [16] Channels (1-way broadcast posts/reactions/polls) NO -> Need backend: NEW SERVICE /v1/channels (follow, posts text/image/video/sticker/link/audio/poll, followers, reactions). One-way vs Communities.
+ [19] Privacy (lastSeen, profile photo, status, read receipts, blocked users) NO flags -> Need backend: privacy settings store + block list (blocked users could reuse contacts). Read receipts toggle needs backend flag.
+ [20] Security disappearing messages / app lock/PIN NO -> Disappearing: Need backend: per-room TTL + auto-delete job. App lock/PIN: Client-only BiometricPrompt (no backend).
+ [22] Chat management archive/mute/pin/unread/clear/delete NO -> Client-only Room DB + DataStore (no backend) unless sync needed.
+ [24] Settings storage/privacy sub-parts      NO -> Backup of settings local.
+ [25] Backup/restore chat                    NO (if Ollacore backend supports) -> Need backend: export/import endpoint or rely on local Room backup to file/S3. Flag to confirm with backend team.
+      Also Home global search media filter, Contacts block/unblock detailed, Profile photo upload -> photo uses attachments YES but privacy flag NO.
+
+SUMMARY BY DECISION
+-------------------
+ CATEGORY 1 YES (connect API): 14 modules -> 1,3,4,7,8,9,11,12,17,18,20(E2EE),21,23,24
+ CATEGORY 2 NO  (backend required): 11 items -> 2(partial),5,6,10(polls/events),13,14,15,16,19,20(disappearing),22,25
+   Of which CLIENT-ONLY feasible (no backend): 13 local history, 22 archive/mute/pin, 20 app lock
+
+RECOMMENDED PIPELINE ORDER
+---------------------------
+ Step 1 (YES): Wire Category 1 UI (Home tabs fix, ticks, media picker, group UI, devices) -> functional test -> real-device test
+ Step 2 (NO but client-only): Build 22, 20 lock, 13 local history without backend
+ Step 3 (NO backend): Spec APIs for 14 Status, 15 Communities, 16 Channels, 10 polls, 5/6 voice/video notes -> implement backend -> then Android UI -> testing
+
+COMPLETED STEPS 2-7 (2026-09-13)
+--------------------------------
+ Search, Multipart init/complete, MimeValidator (35 tests), Content-free Push, MLS handling (25 tests), Forward Secrecy (25 tests) - all now in Category 1 YES.
+
+All features outside ollacore.com/docs not implemented intentionally (ANDROID-QA-REPORT.md:108).
+
+END OF REPORT

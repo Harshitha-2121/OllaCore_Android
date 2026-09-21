@@ -1,0 +1,105 @@
+﻿Feature ID,Category,Feature,Test Case ID,Test Case Title,Type,Preconditions,Steps,Expected Result,Actual Result,Status,Severity,Evidence,Script
+DIR-01,Directory,OTP Request,DIR-01-P01,Valid OTP request,Positive,App ID + phone,POST /otp/request phone=+1555...,dispatched=true,,,Medium,,,test-phone-auth-corrected.ps1 G1-01
+DIR-02,Directory,OTP Verify,DIR-02-P01,Valid OTP verify,Positive,OTP code,POST /otp/verify code,du_ token,,,Critical,,,G1-03
+DIR-02,Directory,OTP Verify,DIR-02-N01,Wrong OTP rejected,Negative,OTP code,POST /otp/verify code=000000,401 invalid code,,,Critical,,,G1-04
+DIR-03,Directory,Get Profile,DIR-03-P01,Get own profile,Positive,Session token,GET /me,phone matches,,,High,,,G1-07
+DIR-04,Directory,Update Profile,DIR-04-P01,Update display_name,Positive,Session,PATCH /me display_name,updated,,,Medium,,,G1-09
+DIR-05,Directory,Contact Lookup,DIR-05-P01,Lookup known contact,Positive,Session,POST /contacts/lookup phones,contacts found,,,Medium,,,G2-01
+DIR-06,Directory,Direct Conversation,DIR-06-P01,Create direct conv,Positive,Session,POST /conversations/direct,room_id,,,High,,,G2-02
+DIR-07,Directory,Group Conversation,DIR-07-P01,Create group conv,Positive,Session,POST /conversations/group,room_id,,,High,,,G2-03
+DIR-08,Directory,List Conversations,DIR-08-P01,List convs,Positive,Session,GET /conversations,list not empty,,,Medium,,,G2-04
+DIR-09,Directory,Room Token,DIR-09-P01,Get room token,Positive,Session+room,GET .../token?device_id,access_token + ice_servers,,,Critical,,,G2-06
+DIR-09,Directory,Room Token,DIR-09-N01,Wrong device_id rejected,Negative,Invalid device,GET .../token?device_id=wrong,400/401,,,High,,,SEC-A03
+DIR-10,Directory,Inbox,DIR-10-P01,Inbox fetch,Positive,Session,GET /inbox,conversations,,,Medium,,,G2-05
+DIR-11,Directory,Register Device,DIR-11-P01,Register FCM,Positive,Session,POST /devices push_token,device_id,,,High,,,PUSH-01
+DIR-12,Directory,List Devices,DIR-12-P01,List devices,Positive,Session,GET /devices,list contains token,,,Medium,,,PUSH-02
+DIR-13,Directory,Delete Device,DIR-13-P01,Unregister device,Positive,Device exists,DELETE /devices,gone,,,Medium,,,PUSH-05
+DIR-13,Directory,Delete Device,DIR-13-N01,Delete unknown device,Negative,Fake token,DELETE,404,,,Low,,,
+DIR-14,Directory,OTP Reuse,DIR-14-N01,Reuse OTP rejected,Negative,OTP used once,POST /otp/verify same code,401,,,Critical,,,G1-05
+DIR-15,Directory,Rate Limiting,DIR-15-N01,OTP rate limit 4th ->429,Negative,3 requests,POST /otp/request 4th,429,,,High,,,SEC-C06
+DIR-16,Directory,Logout,DIR-16-P01,Logout single device,Positive,Session,POST /logout {},200,,,High,,,OllacoreApi.logout
+DIR-16,Directory,Logout,DIR-16-P02,Logout all devices,Positive,Session,POST /logout all_devices:true,200,,,High,,,
+CHAT-01,Chat,Send Message,CHAT-01-P01,Send text,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-02,Chat,Message History,CHAT-02-P01,History GET,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-03,Chat,Edit Message,CHAT-03-P01,Edit own message,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-03,Chat,Edit Message,CHAT-03-N01,Edit other user message ->403,Negative,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-04,Chat,Delete Message,CHAT-04-P01,Delete own,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-05,Chat,Search Messages,CHAT-05-P01,Search hello,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-05,Chat,Search Messages,CHAT-05-N01,Search with special chars,Negative,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-06,Chat,Add Reaction,CHAT-06-P01,Add thumbs,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-07,Chat,Remove Reaction,CHAT-07-P01,Remove thumbs,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-08,Chat,Delivery Receipt,CHAT-08-P01,receipt.delivered,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-09,Chat,Read Receipt,CHAT-09-P01,receipt.read,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-10,Chat,Unread Count,CHAT-10-P01,GET unread,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-11,Chat,Participants,CHAT-11-P01,GET participants,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-12,Chat,Typing Indicators,CHAT-12-P01,typing.started/stopped,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-13,Chat,Presence,CHAT-13-P01,presence.changed,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-14,Chat,Catchup,CHAT-14-P01,catchup after_seq,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CHAT-15,Chat,Ordering,CHAT-15-P01,event_seq monotonic,Positive,Room token + WS,WS frame or REST,ack / 200,,,Medium,,,G3/G4
+CALL-01,Calls,RTC WebSocket,CALL-01-P01,Connect rtc WS,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-02,Calls,Publish offer,CALL-02-P01,call.start audio,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-03,Calls,Subscribe answer,CALL-03-P01,call.accept,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-04,Calls,ICE Candidates,CALL-04-P01,rtc.candidate,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-05,Calls,Leave Call,CALL-05-P01,call.end,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-06,Calls,SFU Re-offer,CALL-06-P01,rtc.offer re-offer,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-07,Calls,Screen Share,CALL-07-P01,screen_share start/stop,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-08,Calls,Call Started,CALL-08-P01,call.started fanout,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-09,Calls,Call Ended,CALL-09-P01,call.ended,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+CALL-10,Calls,ICE Servers,CALL-10-P01,ice_servers has STUN/TURN,Positive,Room token,RTC WS frame,ack,,,High,,,test-calls-deep.ps1
+PUSH-01,Push,FCM Register,PUSH-01-P01,Register FCM,Positive,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+PUSH-02,Push,FCM Unregister,PUSH-02-P01,Unregister,Positive,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+PUSH-03,Push,FCM Service,PUSH-03-P01,onMessageReceived message,Positive,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+PUSH-04,Push,Push Display,PUSH-04-P01,Display notification,Positive,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+PUSH-05,Push,Call Push,PUSH-05-P01,call.started data-only,Positive,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+PUSH-06,Push,Content-free Mode,PUSH-06-P01,E2EE hides content,Positive,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+PUSH-06,Push,Content-free Mode,PUSH-06-N01,Regular shows preview,Negative,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+PUSH-07,Push,Tap Routing,PUSH-07-P01,Tap opens correct conv,Positive,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+PUSH-08,Push,Badge,PUSH-08-P01,Badge increments,Positive,FCM token,FCM data push,notification,,,Medium,,,test-push-deep.ps1
+ATT-01,Attachments,Init Upload,ATT-01-P01,Init single,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-02,Attachments,Upload to URL,ATT-02-P01,PUT presigned,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-03,Attachments,Complete Upload,ATT-03-P01,POST complete,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-04,Attachments,Multipart Init,ATT-04-P01,init-multipart 12MB,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-05,Attachments,Multipart Complete,ATT-05-P01,complete-multipart,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-06,Attachments,Download,ATT-06-P01,GET download_url,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-07,Attachments,Ready Event,ATT-07-P01,WS attachment.ready,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-08,Attachments,Failed Event,ATT-08-P01,WS attachment.failed,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-09,Attachments,Image Preview,ATT-09-P01,Coil preview,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-10,Attachments,Upload Progress,ATT-10-P01,progress 0->100,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-11,Attachments,File Type Verify,ATT-11-P01,Valid JPEG passes,Positive,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+ATT-11,Attachments,File Type Verify,ATT-11-N01,Exe blocked,Negative,Room token,REST + WS,200 / ready,,,Medium,,,test-attachments-deep.ps1
+E2EE-01,E2EE,Keys Upload,E2EE-01-P01,Upload device keys,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-02,E2EE,Keys Query,E2EE-02-P01,Query keys,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-03,E2EE,Keys Claim,E2EE-03-P01,Claim OTK,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-04,E2EE,To-Device Send,E2EE-04-P01,Send to-device,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-05,E2EE,To-Device Fetch,E2EE-05-P01,Fetch to-device,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-06,E2EE,Key Packages Upload,E2EE-06-P01,Upload key package,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-07,E2EE,Key Package Count,E2EE-07-P01,Count,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-08,E2EE,Key Package Consume,E2EE-08-P01,Consume,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-09,E2EE,device_id in Token,E2EE-09-P01,Token has device_id,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-10,E2EE,mls.commit,E2EE-10-P01,Commit triggers rekey,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-11,E2EE,mls.proposal,E2EE-11-P01,Proposal tracked,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-12,E2EE,mls.application,E2EE-12-P01,Application decrypt,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-13,E2EE,mls.welcome,E2EE-13-P01,Welcome join,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-14,E2EE,MLS State Machine,E2EE-14-P01,Epoch ++,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-15,E2EE,Forward Secrecy,E2EE-15-P01,Remove C cannot decrypt,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-15,E2EE,Forward Secrecy,E2EE-15-N01,Removed can still decrypt old,Negative,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-16,E2EE,Epoch Key Mgmt,E2EE-16-P01,Unique key per epoch,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+E2EE-17,E2EE,Member Revocation,E2EE-17-P01,Revoked excluded,Positive,Room token,E2EE REST + WS,200,,,Critical,,,test-e2ee-deep.ps1
+WS-01,WebSocket,Chat WS Auth,WS-01-P01,Bearer chat,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-02,WebSocket,RTC WS Auth,WS-02-P01,Bearer rtc,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-03,WebSocket,message.send,WS-03-P01,send,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-04,WebSocket,message.edit,WS-04-P01,edit,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-05,WebSocket,message.delete,WS-05-P01,delete,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-06,WebSocket,receipt.delivered,WS-06-P01,delivered,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-07,WebSocket,receipt.read,WS-07-P01,read,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-08,WebSocket,reaction,WS-08-P01,add/remove,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-09,WebSocket,typing,WS-09-P01,started/stopped,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-10,WebSocket,catchup,WS-10-P01,catchup,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-11,WebSocket,ping/pong,WS-11-P01,ping->pong,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-12,WebSocket,ack,WS-12-P01,ack frame,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-13,WebSocket,error,WS-13-P01,error on bad JSON,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-14,WebSocket,message.created,WS-14-P01,broadcast,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-15,WebSocket,message.updated,WS-15-P01,broadcast,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-16,WebSocket,message.deleted,WS-16-P01,broadcast,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-17,WebSocket,receipt,WS-17-P01,delivered/read,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1
+WS-18,WebSocket,reaction added/removed,WS-18-P01,broadcast,Positive,WS connected,Send frame,ack/broadcast,,,Medium,,,test-websocket-qa.ps1

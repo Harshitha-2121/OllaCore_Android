@@ -1,0 +1,9 @@
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+kotlin.code.style=official
+android.nonTransitiveRClass=true
+# SIMULATOR - androidTest only, never in main APK. Keep untracked.
+# Copy to ~/.gradle/gradle.properties (not repo) or use CI secret:
+# android.testInstrumentationRunnerArguments.SIM_URL=https://ollacore-otp-sim.vikas4988.workers.dev
+# android.testInstrumentationRunnerArguments.SIM_TOKEN=sim_xxx
+# android.testInstrumentationRunnerArguments.APP_ID=da_xxx

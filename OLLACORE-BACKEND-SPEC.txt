@@ -1,0 +1,179 @@
+OLLACORE BACKEND SPEC - FEATURES WITHOUT API SUPPORT
+====================================================
+Generated: 2026-09-18
+Principle: WhatsApp-style UX on Ollacore-native APIs (not copying WhatsApp proprietary internals).
+Convention used below mirrors existing Ollacore planes:
+  Directory plane : session-token auth  (identity, conversations, devices)
+  Client plane    : room-token auth     (rooms/{id}/... + chat WebSocket frames)
+  Push plane      : FCM data payloads   (type, room_id, sender, encrypted)
+
+STATUS: No Ollacore endpoint exists. Full new service required.
+---------------------------------------------------------------
+A. Data model (per status item)
+   status_id   : string (server-generated, e.g. "st_<uuid>")
+   author_id   : string (principal)
+   kind        : "text" | "image" | "video"
+   body        : { "text": "..." } for text; attachment flow for media
+   attachment_id : string? (reuse POST /v1/rooms/.../attachments/init pattern)
+   created_at  : RFC3339
+   expires_at  : created_at + 24h (server-enforced TTL + sweep job)
+   privacy     : "contacts" | "allow_list" | "deny_list"  (+ user_ids?: string[])
+   viewers     : derived server-side (who fetched), NOT client-reported
+
+B. Directory-plane endpoints (session auth)
+   POST   /v1/status
+     body: { "kind": "text"|"image"|"video", "body": {...}, "attachment_id"?: "...", "privacy": "contacts" }
+     -> 201 { "status_id", "created_at", "expires_at" }
+   GET    /v1/status/feed
+     -> 200 { "mine": [...], "recent": [...], "viewed": [...] }
+        (server splits viewed vs recent from viewer records; expired items excluded)
+   DELETE /v1/status/{status_id}                      (author deletes own)
+   POST   /v1/status/{status_id}/viewed               (server records viewer + timestamp)
+   GET    /v1/status/{status_id}/viewers              (author sees viewer list)
+     -> 200 { "viewers": [{ "user_id", "display_name", "viewed_at" }] }
+   POST   /v1/status/{status_id}/reactions  { "emoji" }   (mirrors message reactions)
+   POST   /v1/status/privacy  { "mode": "contacts"|"allow_list"|"deny_list", "user_ids": [] }
+
+C. Push (data-only, content-free for consistency)
+   { "type": "status.created", "author_id": "...", "status_id": "...", "kind": "image" }
+   { "type": "status.reaction", "status_id": "...", "sender": "...", "emoji": "..." }
+   Replies to a status arrive as normal 1-to-1 messages (no new path).
+
+D. Android readiness (already in repo, awaiting these endpoints)
+   - Media pick/upload: AttachmentUploader + MimeValidator + init/multipart/complete (reuse as-is).
+   - Viewers/privacy UI: new StatusScreen + viewers sheet (no existing equivalent).
+   - Feed sections map 1:1 to GET /v1/status/feed (My Status / Recent updates / Viewed updates).
+
+VOICE MESSAGES: Needs kind + metadata support (attachments already generic).
+--------------------------------------------------------------------------------
+Gap: SendMessageRequest.kind has no voice-note convention; no duration/waveform
+contract; composer mic is a placeholder (ChatScreen.kt).
+
+A. Contract (NO new endpoint; extends existing message send)
+   kind: "voice_note"
+   body: { "text": "<optional caption>",
+           "mime": "audio/ogg;codecs=opus",
+           "filename": "voice_<ts>.ogg",
+           "byte_size": 48210,
+           "duration_ms": 12000,
+           "waveform": [0,12,45,...,98] }      // 20-60 bars, 0-100, client-computed
+   attachment_ids: ["<att_...>"]                // existing init/PUT/complete flow
+   Recommended client encoding: Opus in OGG (MediaRecorder: AAC/MP4 fallback where
+   Opus unavailable; server MUST NOT gate on exact codec, only audio/* MIME).
+
+B. Server work (expected small)
+   1. Accept kind="voice_note" in POST /v1/rooms/{id}/messages + WS message.send
+      (today unknown kinds may 400 - confirm).
+   2. Include voice_note items in GET .../messages/search (for Audio tab).
+   3. Push preview: "🎵 Voice message (0:12)" via duration_ms (content-free: no transcript).
+
+C. Android readiness
+   - Audio bubble already renders kind=audio + MediaPlayer (ChatScreen.kt);
+     extend to kind=voice_note + waveform bars + duration label + speed toggle.
+   - Recorder: MediaRecorder pause/resume (API 24+), live amplitude -> waveform,
+     then existing uploadAndSendFile() with kind=voice_note.
+
+VIDEO MESSAGES: Needs kind + thumbnail contract (attachments already generic).
+--------------------------------------------------------------------------
+Gap: no short-video-note convention; no thumbnail/duration contract.
+
+A. Contract (NO new endpoint; extends existing message send)
+   kind: "video_note"
+   body: { "text": "<optional caption>",
+           "mime": "video/mp4",
+           "filename": "video_<ts>.mp4",
+           "byte_size": 1048576,
+           "duration_ms": 15000,                // cap 60s client-side
+           "thumbnail_attachment_id": "<att_...>" }
+   attachment_ids: ["<video_att>", "<thumb_att>"]  // thumb = small JPEG via existing flow
+
+B. Server work (expected small)
+   1. Accept kind="video_note" in message send paths (same as voice_note).
+   2. Include video_note items in search (for Video tab).
+   3. Push preview: "🎥 Video message".
+
+C. Android readiness
+   - Video bubble already renders kind=video (ChatScreen.kt); extend to
+     kind=video_note using thumbnail_attachment_id for the tile (circular crop,
+     WhatsApp-style) + duration badge + tap-to-play.
+
+BACKEND CHECKLIST (acceptance before Android UI build)
+------------------------------------------------------
+ [ ] Unknown message kinds (voice_note, video_note, location) accepted, stored,
+     echoed over WS, returned by history + search (or explicit 400 catalogue).
+ [ ] Status endpoints (section A/B) implemented + 24h expiry sweep verified.
+ [ ] Push types status.created / status.reaction delivered data-only.
+ [ ] Invite/pair decision for Linked Devices QR (optional; current register flow suffices).
+ [ ] Block/mute endpoint decision (needed by Contacts Block/Unblock + Privacy).
+
+ANDROID QUEUE ONCE ABOVE LANDS
+------------------------------
+ 1. StatusScreen (feed + composer + viewers + privacy) - all new UI.
+ 2. Composer mic -> recorder -> voice_note send; waveform + speed in audio bubble.
+ 3. Camera long-press / video-note mode -> video_note send; round tile render.
+ 4. Security UX pass (E2EE untouched): per-chat encryption notice, safety-number
+     style verify sheet, disappearing-message TTL UI (needs server TTL support).
+
+POLLS & EVENTS: new room-scoped APIs + WS events required.
+-----------------------------------------------------------
+POST   /v1/rooms/{id}/polls
+  body: { "question": "...", "options": ["A","B"], "allow_multiple": false,
+          "closes_at": "<rfc3339>?" }
+  -> 201 { "poll_id", "message_id" }   (poll renders as kind="poll" message)
+POST   /v1/rooms/{id}/polls/{poll_id}/vote  { "option_ids": [0] }
+WS: poll.created / poll.vote / poll.closed  (payloads carry poll_id + tallies)
+POST   /v1/rooms/{id}/events
+  body: { "title": "...", "starts_at": "<rfc3339>", "ends_at"?, "place"?, "note"? }
+  -> 201 { "event_id", "message_id" }  (kind="event" message; RSVP via
+     POST /v1/rooms/{id}/events/{event_id}/rsvp { "answer": "yes"|"no"|"maybe" })
+WS: event.created / event.updated / event.rsvp
+Android readiness: poll/event bubbles + vote/RSVP sheets are new UI;
+message-status, reactions and forwarding patterns already cover the plumbing.
+
+COMMUNITIES vs CHANNELS: separate services (do NOT merge).
+------------------------------------------------------------
+Communities = group-of-groups + admin announcements.
+  POST   /v1/communities { "name", "description"?, "icon_url"? } -> { "community_id" }
+  POST   /v1/communities/{id}/groups { "room_id" }       (attach existing group)
+  POST   /v1/communities/{id}/announce { "body": {...} } (admin broadcast to all
+     member groups; rendered as announcement message with community badge)
+  GET    /v1/communities/{id} -> { "groups": [...], "member_count": n }
+Channels = one-way broadcast (follow, react, never reply).
+  POST   /v1/channels { "name", "description"?, "icon_url"? } -> { "channel_id" }
+  POST   /v1/channels/{id}/follow | DELETE .../follow     (subscribe/unsubscribe)
+  POST   /v1/channels/{id}/posts
+    body: { "kind": "text"|"image"|"video"|"audio"|"poll"|"link",
+            "body": {...}, "attachment_ids": [] }          (reuse attachment flow)
+  POST   /v1/channels/{id}/posts/{post_id}/reactions { "emoji" }
+  GET    /v1/channels/{id}/posts?before=&limit=            (follower-only read)
+Android readiness: community rail + announcement rendering and channel
+follow/post/reactions screens are new UI; attachments + reactions reused.
+
+PRIVACY STORE: new directory settings required.
+------------------------------------------------
+GET/PATCH /v1/directory/privacy
+  { "last_seen": "everyone"|"contacts"|"nobody",
+    "photo_visibility": "everyone"|"contacts"|"nobody",
+    "status_visibility": "everyone"|"contacts"|"allow_list"|"deny_list",
+    "read_receipts": true|false,
+    "status_user_ids": [] }
+Block list (needed by Contacts Block/Unblock):
+  POST   /v1/directory/blocks { "user_id" } | DELETE /v1/directory/blocks/{user_id}
+  GET    /v1/directory/blocks -> { "user_ids": [...] }
+Server must enforce: hidden last-seen/presence, withheld receipts, blocked
+message filtering. Android then binds Settings rows to this store.
+
+DISAPPEARING MESSAGES: server TTL required for cross-device sync.
+------------------------------------------------------------------
+PATCH  /v1/rooms/{id} { "disappearing_ttl_sec": 86400|604800|0 }
+Server deletes expired messages + emits message.deleted over WS (clients
+already handle it). Client-only hiding is NOT a substitute (devices diverge).
+
+BACKUP / RESTORE: server export required (or confirm client-only scope).
+-------------------------------------------------------------------------
+POST   /v1/directory/backup -> { "export_url", "expires_at" }  (server snapshot;
+E2EE rooms export ciphertext + key envelope only)
+GET    /v1/directory/backup -> { "exports": [...] }
+If declined, Android does encrypted local export (Room/DataStore dump) only.
+
+END OF SPEC
