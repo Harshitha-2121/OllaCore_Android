@@ -1,0 +1,103 @@
+OLLACORE ANDROID - PIN TO PIN FEATURE REPORT
+==============================================
+Generated : 2026-09-23 UTC
+Project   : Ollacore_android_fixed_v3 / Ollacore / android
+Package   : com.ollacore.app.debug
+Total routes : 19 (MainActivity.kt:151-666)
+Total UI screens : 24 | ViewModels : 13 | Data stores : SessionStore, ChatPrefsStore, CallLogStore, ThemeStore
+
+------------------------------------------------
+ROUTE MAP (exact, MainActivity.kt)
+------------------------------------------------
+1. splash (MainActivity.kt:151) -> SplashScreen.kt : gradient logo + tagline Connect. Chat. Share. + 850ms fade/scale/rise, routes to onboarding once per install else phone/home.
+2. onboarding (MainActivity.kt:182) -> OnboardingScreen.kt : 3 pages pager + indicators + Get Started / Log in.
+3. phone (MainActivity.kt:193) -> PhoneInputScreen.kt : logo, Welcome, country selector (saveable Int index), E.164 normalize for API only, Continue, QR note, terms, rate-limit 60s handling.
+4. otp (MainActivity.kt:204) -> OtpVerificationScreen.kt : Verify Your Number, 6 boxes, autofocus, paste, countdown, resend, loading/invalid/success.
+5. home (MainActivity.kt:218) -> HomeScreen.kt + HomeViewModel.kt : bottom nav Chats/Updates/Calls/Settings, dashboard logo + search bar + chips All/Unread/Groups/Channels, rich rows (avatar, name, You-prefix, timestamps, unread badge), search_icon tag, inbox_card tags, chat_list tag, gradient FAB new chat/group, tab crossfade.
+6. chat/{roomId} (MainActivity.kt:251) -> ChatScreen.kt + ChatViewModel.kt : full chat, see SEC 2.
+7. search/{roomId}/{roomToken} (MainActivity.kt:360) -> SearchScreen.kt + SearchViewModel.kt : room search GET /v1/rooms/{id}/messages/search, debounce 300ms, highlight matches, results jump, loading + error states.
+8. profile (MainActivity.kt:389) -> ProfileScreen.kt : photo/about/name edit, PATCH /v1/directory/me, SessionStore persist.
+9. contacts (MainActivity.kt:410) -> ContactsScreen.kt + ContactsViewModel.kt : inbox peers, search, add-by-phone lookup + openDirect POST /v1/directory/conversations/direct, New Group entry. Block/unblock NOT built (no endpoint).
+10. newGroup (MainActivity.kt:440) -> NewGroupScreen.kt + NewGroupViewModel.kt : 3-step select+chips -> name/desc/photo -> review + Create POST /v1/directory/conversations/group.
+11. devices (MainActivity.kt:468) -> DevicesScreen.kt + DevicesViewModel.kt : this-device card FCM match, register POST /v1/directory/devices, list GET, logout DELETE + confirm, link explainer (no QR endpoint).
+12. notifSettings (MainActivity.kt:482) -> NotificationsSettingsScreen.kt + ViewModel : categories messages/calls/mentions-only/groups-note, mute respected, FCM channels.
+13. privacy (MainActivity.kt:493) -> PrivacySecurityScreen.kt + ViewModel : E2EE info, app lock gate, disappearing/privacy honest gates (server store missing, spec only).
+14. globalSearch (MainActivity.kt:505) -> GlobalSearchScreen.kt + GlobalSearchViewModel.kt : tabs chats/messages/media/images/videos/documents/links/audio, fan-out caps, highlight, recents.
+15. doc?url&name&mime (MainActivity.kt:527) -> DocumentViewerScreen.kt : PDF PdfRenderer + FileProvider share + info. Needs res/xml/filepaths.xml + manifest.
+16. imageViewer?url (MainActivity.kt:543) -> ImageViewerScreen.kt : fullscreen pinch zoom, tap chrome, share.
+17. contactInfo/{roomId}?peerName&peerPhone (MainActivity.kt:555) -> ContactInfoScreen.kt + ContactInfoViewModel.kt : header + alias rename, Voice/Video/Search, media strip + counts, starred count, mute toggle, disappearing/privacy gates, E2EE dialog, back-to-chat.
+18. groupInfo/{roomId} (MainActivity.kt:603) -> GroupInfoScreen.kt + GroupInfoViewModel.kt : photo/name/desc, audio/video/search, members + Admins, add/remove/admin/invite/rename/icon/leave, mute, live member.added/removed, leave -> home.
+19. call/{roomId}?incoming&audioOnly&peerName (MainActivity.kt:648) -> CallScreen.kt + CallViewModel.kt : see SEC 4.
+
+------------------------------------------------
+SEC 2 - CHAT (ChatScreen.kt + ChatViewModel.kt)
+------------------------------------------------
+Header: avatar + presence online/typing/lastSeen, voice call button -> call/{roomId}?audioOnly=true, video call button -> audioOnly=false, search -> search/{roomId}/{roomToken}, More menu, profile click -> groupInfo/{roomId} for groups else contactInfo/{roomId} for 1-1.
+Messages: text/emoji, reply (quote + jump), reactions add/remove, edit PATCH + WS message.edit, delete -> tombstone This message was deleted (deletedIds), forward (same-id send), copy, select multi + clear, star toggle persisted, SystemNoticeChip + messageDay/dayLabel date chips, doodle Canvas background, group sender colors/mini avatars/member-count, timestamps 16sp, bodyString() null-guard, unknown kinds honest labels (voice_note/video_note/contact/poll/event/location/unsupported).
+States: ticks SENDING/SENT/DELIVERED/READ/FAILED + Retry, WS ack + receipt.delivered/read, monotonic upgrades, same-id retryForMessage, reconnect joinRoom, loadMore pagination before_seq, typing.started/stopped send, catchup event_seq ordering, attachment.ready/failed handling.
+Composer: emoji button, + attachment sheet, camera shortcut, text field draft rememberSaveable (survives rotation), voice/send swap, send -> sendMessage(text), voice record -> startRecording/cancelRecording/sendRecording (recording bar timer + waveform), location -> sendLocation demo 12.9716,77.5946 (FusedLocation TODO, kind=location backend check), contact share -> card message, resolveAttachmentUrl onResolveUrl.
+Links: LinkifiedText tappable links (allUrls ranges, underline, browser open), LinkPreviewCard domain via linkHost + open (no unfurl backend), helpers in data/util/LinkUtils.kt: firstUrl/allUrls/linkHost (ChatScreen.kt:1073,1599).
+Media in chat: image bubbles Coil, video bubbles retriever thumbnails + duration, document bubbles + tap -> doc route, audio bubbles MediaPlayer + waveform + duration, location bubble.
+
+------------------------------------------------
+SEC 3 - MEDIA PIPELINE (attachments/* + ChatRepository + OllacoreApi)
+------------------------------------------------
+Picker: AttachmentPicker.kt colorful icons Camera/Gallery/Document/Audio/Location/Contact + recent-photos strip.
+Flow: pre-send preview + caption -> uploadAndSendFile(file,mime,kind,caption) -> init POST /v1/rooms/{id}/attachments/init (OllacoreApi.kt:260) or init-multipart (OllacoreApi.kt:332) -> PUT presigned (AttachmentUploader.kt) -> complete (OllacoreApi.kt:270) or complete-multipart (OllacoreApi.kt:342, 409 duplicate, 500MB, zero-byte, per-part %) -> attachment.ready prefetch -> send kind=image/video/audio/file + attachment_ids.
+UI: UploadProgress.kt inline progress 0-100% + cancel (cancelUpload), error + file-retained retry (retryUpload, clearUploadError), download GET /v1/rooms/{id}/attachments/{id}/download (OllacoreApi.kt:279) for viewers.
+Validation: MimeValidator.kt magic bytes + 18 blocked types + intermediate segment script.sh.txt flagged + MZ header, 32 tests.
+
+------------------------------------------------
+SEC 4 - CALLS (CallScreen.kt + CallViewModel.kt + RtcWebSocket.kt + CallLogStore.kt)
+------------------------------------------------
+Signaling: WS /v1/rtc/ws chatbox,bearer.token (RtcWebSocket.kt:15), offer sendOffer (RtcWebSocket.kt:65 + CallViewModel.kt:166), answer sendAnswer (RtcWebSocket.kt:76 + CallViewModel.kt:139), candidate ICE (RtcWebSocket.kt:85), leave (RtcWebSocket.kt:97 + CallViewModel.kt:214), SFU re-offer (RtcWebSocket.kt:44), call.started/ended (ChatWebSocket.kt:104), room token device_id (OllacoreApi.kt:137), ice_servers (Models.kt:127).
+Audio call: earpiece default, mute, speaker, end, CallPhase outgoing/incoming/connecting/connected/ended, incoming dialog + accept/decline, push ringing via ContentFreePushManager, remote-hangup.
+Video call: local PiP, remote tiles + adaptive group grid, camera on/off, null-safe switchCamera(handler), speaker.
+Screen share: REAL MediaProjection sender-track replace, no renegotiation (was mock CallViewModel.kt:208).
+History: CallLogStore.kt DataStore ring completed/missed/cancelled, CallHistoryScreen.kt + ViewModel tabs + call-back + delete.
+Crash fix: org/webrtc/Environment.java wrapper + ProGuard keeps (desynced AAR fix), verified Connected x2.
+
+------------------------------------------------
+SEC 5 - HOME TABS
+------------------------------------------------
+Chats tab: inbox GET /v1/directory/inbox?limit=30 (OllacoreApi.kt:146) + listConversations (OllacoreApi.kt:108), unread GET /v1/rooms/{id}/unread, participants GET, presence.changed live, chat open -> chat/{roomId}.
+Updates tab: UpdatesScreen.kt honest placeholder (Status needs backend, spec written).
+Calls tab: CallHistoryScreen.kt client history + new call via chat/contact/group info.
+Settings tab: SettingsScreen.kt rows (profile, theme, notifications, privacy, devices, storage/cache, E2EE info, app lock, logout), theme picker Blue/Green/Purple/Dark/System (ThemeStore.kt + Theme.kt + Type.kt).
+
+------------------------------------------------
+SEC 6 - CONTACTS / GROUPS / DEVICES / SEARCH / VIEWERS / INFO PANELS
+------------------------------------------------
+Contacts: lookup POST /v1/directory/contacts/lookup, openDirect, search filter, contactInfo navigation with peerName/peerPhone.
+NewGroup + GroupInfo: as ROUTE MAP 10/18, createGroupConversation, getParticipants, rename/description/icon/add/remove/admin/invite/leave, roomTokenSnapshot for search.
+Devices: register/list/delete device endpoints, FCM token match.
+Search: room SearchScreen + GlobalSearchScreen fan-out + recents via ChatPrefsStore.kt.
+Viewers: DocumentViewer + ImageViewer + FileProvider.
+ContactInfo + GroupInfo panels: alias (ChatPrefsStore), mute (ChatPrefsStore), starred (ChatPrefsStore), media scan + counts, E2EE dialog.
+Stores: SessionStore.kt (token/about/avatar/onboarding, logout-safe clear), ChatPrefsStore.kt (alias/starred/mute/recents/notif/applock), CallLogStore.kt, ThemeStore.kt, ConnectivityObserver.kt (offline banners), UxKit.kt (shimmer skeletons, friendly errors).
+
+------------------------------------------------
+SEC 7 - AUTH + THEME + DESIGN SYSTEM
+------------------------------------------------
+Auth: requestOtp (OllacoreApi.kt:45) E.164, verifyOtp (OllacoreApi.kt:54), getProfile (OllacoreApi.kt:65), updateProfile PATCH (OllacoreApi.kt:84), SessionStore, SimHelper.kt /last-otp contract ready (needs public sink + SIM_TOKEN).
+Theme: OllacoreDesign.kt palette #5366FF #8B5CF6 #EC4899 #10B981 #22C55E #EF4444 #0F172A #111827 #334155 #64748B #F8FAFC #FFFFFF #E2E8F0, gradients only splash/onboarding/CTAs/empty-states/call-screens, BrandAvatar GlassCard GradientButton OllacoreLogo, wallpaper tint off, dark #0B1120/#111827/#172033, Inter-ready Roboto fallback.
+Push/E2EE/WS: OllacoreFirebaseMessagingService.kt onMessageReceived + tap routing open_chat (message/group open correct chat, call rings), PushConfigManager.kt categories, E2eeManager.kt keys/keypackages/todevice, MlsMessageHandler.kt mls kinds (19 tests), ForwardSecrecyManager.kt epoch rotation (26 tests, re-add revocation fix), ChatWebSocket.kt all frames.
+
+------------------------------------------------
+SEC 8 - PRESENT vs PLACEHOLDER vs MISSING (honest)
+------------------------------------------------
+FULLY PRESENT: splash, onboarding, phone, otp, home dashboard, 1-1 chat + ticks + reply/react/edit/delete/forward/copy/select/star, media picker/upload/bubbles, voice recorder as kind=audio, location bubble (demo coords), links tappable + preview card domain, contact share card, tombstones, date chips, doodle bg, contacts lookup + DM, new group + group info + live member events, voice/video calls + share + history + incoming + push routing, notifications settings + tap routing, linked devices, room + global search, doc/image viewers, contact/group info panels, profile edit, settings/theme/lock/E2EE/storage.
+HONEST PLACEHOLDERS (UI states backend missing, spec in OLLACORE-BACKEND-SPEC.txt): Updates/Status tab, Channels chips content, voice_note/video_note kinds (send audio/video generic instead), polls/events bubbles, privacy store rows, disappearing TTL rows, block list, backup/restore, QR pairing, group invite server accept.
+NOT BUILT (client-only, same DataStore pattern ready): archive/pin/unread-clear/delete sync, local block-hide stopgap.
+BLOCKED on sir/backend: sandbox tenant + API key, public OTP sink + SIM_TOKEN/APP_ID, FCM/APNs creds, Status/Communities/Channels/polls/events/voice_note/video_note/privacy/TTL/backup/block/QR server work.
+
+------------------------------------------------
+SEC 9 - TEST + BUILD PROOF
+------------------------------------------------
+Unit 83/83: 26 ForwardSecrecy + 19 MLS + 32 Mime + 6 LinkUtilsTest (firstUrl/allUrls/linkHost incl. exact https://example.com string).
+Instrumentation: AuthFlowTest 12/12 (013 skipped real logout), UiDeepTest 10/10 (tags chat_list/search_icon/inbox_card, rotation draft fix).
+QA: test-android-qa.ps1 102/104 (CHAT-001 parsing + CHAT-004 dependent FAIL), docs 104/104, coverage DOCUMENTATION-COVERAGE.md.
+Build: compileDebugKotlin 2m03s warnings only + assembleDebug green, APK app/build/outputs/apk/debug/app-debug.apk ~68MB, dex LinkPreviewCard=13 SystemNoticeChip=11 + Environment wrapper, adb install -r -d OK, logcat zero FATAL/CNFE/linkage, device Connected x2, rotation x2, OTP countdown, ContactInfo + tombstones/chips/doodle verified.
+Repo: https://github.com/Harshitha-2121/OllaCore_Android main 104 files.
+
+END OF PIN-TO-PIN REPORT

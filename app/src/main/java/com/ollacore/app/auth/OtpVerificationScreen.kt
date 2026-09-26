@@ -86,12 +86,22 @@ fun OtpVerificationScreen(
     }
 
     fun onBoxInput(index: Int, raw: String) {
-        val digits = raw.filter(Char::isDigit)
-        if (digits.length > 1) {
-            // Paste: distribute across boxes from the start.
-            val next = List(OTP_LEN) { i -> digits.getOrNull(i)?.toString() ?: "" }
+        // Strip the echo of the char already shown: IMEs (Gboard suggestion-strip
+        // paste, autofill) often deliver newValue = oldChar + pastedText, so the
+        // first digit was consumed as "single input" and paste started at box 2.
+        val shown = boxes[index]
+        val fresh = if (shown.isNotEmpty() && raw.startsWith(shown)) raw.removePrefix(shown) else raw
+        val digits = fresh.filter(Char::isDigit)
+        if (raw.length > 1 || digits.length > 1) {
+            // Paste/autofill: distribute starting at THIS box (not box 0), keep
+            // boxes outside the pasted range untouched.
+            val next = boxes.toMutableList()
+            digits.forEachIndexed { off, c ->
+                val pos = index + off
+                if (pos < OTP_LEN) next[pos] = c.toString()
+            }
             pushBoxes(next)
-            val focus = digits.length.coerceAtMost(OTP_LEN - 1)
+            val focus = (index + digits.length).coerceAtMost(OTP_LEN - 1)
             runCatching { focusers[focus].requestFocus() }
             return
         }

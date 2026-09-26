@@ -40,6 +40,25 @@ class OllacoreApi(
         return json.decodeFromString(body)
     }
 
+    /**
+     * Fire-and-forget calls MUST still check success: silently closing the
+     * response turned every 404/405 into a fake success (proven by group
+     * leave reporting success while membership persisted).
+     */
+    private fun executeUnit(request: Request) {
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val peek = runCatching { response.peekBody(512).string() }.getOrNull() ?: ""
+                val error = try { json.decodeFromString<ApiError>(peek) } catch (_: Exception) { null }
+                throw ApiException(
+                    message = error?.message ?: "HTTP ${response.code}",
+                    code = error?.code,
+                    httpStatus = response.code
+                )
+            }
+        }
+    }
+
     // ── Directory Auth ──────────────────────────────────────────────
 
     fun requestOtp(phone: String): OtpResponse {
@@ -78,7 +97,7 @@ class OllacoreApi(
             .post(body)
             .auth(token)
             .build()
-        client.newCall(request).execute().close()
+        executeUnit(request)
     }
 
     fun updateProfile(token: String, displayName: String? = null, about: String? = null, avatarUrl: String? = null): UserProfile {
@@ -261,8 +280,9 @@ class OllacoreApi(
 
     // ── Group management ──────────────────────────────────────────
     // createGroupConversation + getParticipants are confirmed Ollacore endpoints (Category 1 YES).
-    // The rest use conventional Ollacore-style room paths; if the backend answers 404/405 the
-    // UI surfaces it as "backend check required" (Category 2) instead of failing silently.
+    // The rest use conventional Ollacore-style room paths executed via executeUnit, so a
+    // 404/405 throws and the UI surfaces it (Category 2 backend gap) instead of fake success.
+    // PROVEN missing: DELETE rooms/{id}/members/me -> 404 "no such route" (leave).
 
     /** Backend-check: add a member to a group. */
     fun addMember(roomToken: String, roomId: String, userId: String) {
@@ -272,7 +292,7 @@ class OllacoreApi(
             .post(body.jsonBody())
             .auth(roomToken)
             .build()
-        client.newCall(request).execute().close()
+        executeUnit(request)
     }
 
     /** Backend-check: remove a member from a group. */
@@ -282,7 +302,7 @@ class OllacoreApi(
             .delete()
             .auth(roomToken)
             .build()
-        client.newCall(request).execute().close()
+        executeUnit(request)
     }
 
     /** Backend-check: leave the group (removes self). */
@@ -292,7 +312,7 @@ class OllacoreApi(
             .delete()
             .auth(roomToken)
             .build()
-        client.newCall(request).execute().close()
+        executeUnit(request)
     }
 
     /** Backend-check: rename / set description / change icon. */
@@ -303,7 +323,7 @@ class OllacoreApi(
             .patch(body.jsonBody())
             .auth(roomToken)
             .build()
-        client.newCall(request).execute().close()
+        executeUnit(request)
     }
 
     /** Backend-check: promote/demote member (role = "admin" | "member"). */
@@ -314,7 +334,7 @@ class OllacoreApi(
             .post(body.jsonBody())
             .auth(roomToken)
             .build()
-        client.newCall(request).execute().close()
+        executeUnit(request)
     }
 
     /** Backend-check: create a shareable invite for the group. */
@@ -330,7 +350,10 @@ class OllacoreApi(
     // ── Attachments ─────────────────────────────────────────────────
 
     fun initAttachment(roomToken: String, roomId: String, filename: String, mimeType: String, byteSize: Long): AttachmentInitResponse {
-        val body = """{"filename":"$filename","mime":"$mimeType","byte_size":$byteSize}""".jsonBody()
+        // Same contract as init-multipart (original_name/declared_mime): the old
+        // filename/mime names were rejected by the server with HTTP 422.
+        val safeName = filename.replace("\\", "\\\\").replace("\"", "\\\"")
+        val body = """{"original_name":"$safeName","declared_mime":"$mimeType","byte_size":$byteSize}""".jsonBody()
         val request = Request.Builder()
             .url("$apiBase/rooms/$roomId/attachments/init")
             .post(body)
@@ -402,7 +425,8 @@ class OllacoreApi(
     // ── Multipart Upload ────────────────────────────────────────────
 
     fun initMultipartUpload(roomToken: String, roomId: String, filename: String, mimeType: String, byteSize: Long, partSize: Long = 8388608): MultipartInitResponse {
-        val body = """{"original_name":"$filename","declared_mime":"$mimeType","byte_size":$byteSize,"part_size":$partSize}""".jsonBody()
+        val safeName = filename.replace("\\", "\\\\").replace("\"", "\\\"")
+        val body = """{"original_name":"$safeName","declared_mime":"$mimeType","byte_size":$byteSize,"part_size":$partSize}""".jsonBody()
         val request = Request.Builder()
             .url("$apiBase/rooms/$roomId/attachments/init-multipart")
             .post(body)

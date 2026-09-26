@@ -50,6 +50,26 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Opening a chat unarchives it (Close chat is reversible). Runs in this
+     * VM's scope with the SHARED prefs store: the home entry stays in the
+     * backstack so the write always completes, unlike a route-bound scope
+     * that is cancelled by the navigate that follows it.
+     */
+    fun markOpened(roomId: String) {
+        viewModelScope.launch {
+            // Settings > Chats > Keep chats archived: opening no longer unarchives.
+            val keep = runCatching {
+                container.chatPrefsStore.getCustomBool(
+                    com.ollacore.app.data.local.ChatPrefsStore.SettingsKeys.KEEP_ARCHIVED, false
+                )
+            }.getOrElse { false }
+            if (!keep) {
+                runCatching { container.chatPrefsStore.setArchived(roomId, false) }
+            }
+        }
+    }
+
     fun loadInbox(token: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }

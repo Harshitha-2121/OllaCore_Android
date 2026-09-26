@@ -153,6 +153,11 @@ fun SettingsContent(
 }
 
 @Composable
+internal fun ThemePickerDialogHost(onDismiss: () -> Unit) {
+    ThemePickerDialog(onDismiss = onDismiss)
+}
+
+@Composable
 private fun ThemePickerDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

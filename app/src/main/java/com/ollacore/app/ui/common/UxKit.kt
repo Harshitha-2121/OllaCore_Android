@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
@@ -116,31 +117,16 @@ fun SkeletonList(
 
 // ── Spec 34: friendly errors (never raw exceptions) ───────────────────
 
-/** Maps technical failures to human copy. Add cases as backends evolve. */
-fun friendlyError(raw: String?): String {
-    if (raw.isNullOrBlank()) return "Something went wrong."
-    val lower = raw.lowercase()
-    return when {
-        "unable to resolve host" in lower || "no address associated" in lower ||
-            "network is unreachable" in lower || "connection refused" in lower ||
-            "timeout" in lower || "timed out" in lower ->
-            "Please check your connection and try again."
-        "401" in lower || "unauthorized" in lower || "session" in lower ->
-            "Your session expired. Please log in again."
-        "404" in lower || "not found" in lower ->
-            "This is not available yet on the server."
-        "429" in lower || "rate" in lower ->
-            "Too many tries. Please wait a moment."
-        raw.length > 140 -> "Something went wrong. Please try again."
-        else -> raw
-    }
-}
+/** Maps technical failures to human copy (logic lives in data.util, tested). */
+fun friendlyError(raw: String?): String =
+    com.ollacore.app.data.util.friendlyError(raw)
 
 @Composable
 fun ErrorState(
     message: String?,
     onRetry: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
+    onLoginExpired: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -178,7 +164,15 @@ fun ErrorState(
             if (onBack != null) {
                 OutlinedButton(onClick = onBack) { Text("Go Back") }
             }
-            if (onRetry != null) {
+            // Expired sessions can't be retried into existence: offer log-in instead.
+            val authExpired = com.ollacore.app.data.util.isAuthError(message)
+            if (authExpired && onLoginExpired != null) {
+                Button(onClick = onLoginExpired) {
+                    Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Log in again")
+                }
+            } else if (onRetry != null) {
                 Button(onClick = onRetry) {
                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))

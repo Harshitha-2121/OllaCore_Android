@@ -359,4 +359,63 @@ class MimeValidatorTest {
         val hash2 = MimeValidator.computeSha256(file2)
         assertNotEquals("Different files should have different hashes", hash1, hash2)
     }
+
+    // ── Voice recordings: mp42-branded AAC-in-M4A declared as audio/mp4 ──
+
+    private fun createM4aFile(name: String = "voice_123.m4a"): File {
+        // Exact shape of MediaRecorder MPEG_4/AAC output: ftypmp42.
+        val header = byteArrayOf(
+            0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70,
+            0x6D, 0x70, 0x34, 0x32, 0x00, 0x00, 0x00, 0x00
+        )
+        val padding = ByteArray(2048)
+        return createFile(name, header + padding)
+    }
+
+    @Test
+    fun `m4a extension maps to audio mp4`() {
+        assertEquals("audio/mp4", MimeValidator.detectMimeType(ByteArray(16), "m4a"))
+    }
+
+    @Test
+    fun `recorder m4a declared audio mp4 passes validation`() {
+        val file = createM4aFile()
+        val result = MimeValidator.validate(file, "audio/mp4")
+        assertTrue("mp42 M4A must validate as audio/mp4: ${result.error}", result.isValid)
+    }
+
+    @Test
+    fun `recorder m4a declared video mp4 fails validation`() {
+        val file = createM4aFile()
+        val result = MimeValidator.validate(file, "video/mp4")
+        assertFalse("M4A audio must not pass as video", result.isValid)
+    }
+
+    @Test
+    fun `exe content still rejected even with m4a name`() {
+        val header = byteArrayOf(0x4D, 0x5A, 0x90.toByte(), 0x00, 0x03, 0x00, 0x00, 0x00)
+        val padding = ByteArray(1024)
+        val file = createFile("evil.m4a", header + padding)
+        val result = MimeValidator.validate(file, "audio/mp4")
+        assertFalse("MZ executable must never validate", result.isValid)
+    }
+
+    @Test
+    fun `ensureM4aBrand stamps mp42 files and ignores non-ftyp`() {
+        val header = byteArrayOf(
+            0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70,
+            0x6D, 0x70, 0x34, 0x32, 0x00, 0x00, 0x00, 0x00
+        )
+        val audio = createFile("voice.m4a", header + ByteArray(2048))
+        assertTrue(MimeValidator.ensureM4aBrand(audio))
+        val patched = ByteArray(12)
+        audio.inputStream().use { it.read(patched) }
+        assertEquals("M4A ", String(patched, 8, 4, Charsets.US_ASCII))
+        // Size unchanged: only the 4 brand bytes move.
+        assertEquals((16 + 2048).toLong(), audio.length())
+
+        val text = createTextFile("note.txt", "hello")
+        assertFalse(MimeValidator.ensureM4aBrand(text))
+        assertEquals("hello", text.readText())
+    }
 }

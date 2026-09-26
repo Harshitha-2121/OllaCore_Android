@@ -76,8 +76,11 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(otpCode = code.filter(Char::isDigit).take(6), error = null) }
     }
 
+    /** Display keeps human spacing ("+1 555..."); the API requires E.164 ("+1555..."). */
+    private fun e164(phone: String): String = phone.filter { it.isDigit() || it == '+' }
+
     fun requestOtp() {
-        val phone = _uiState.value.phone.trim()
+        val phone = e164(_uiState.value.phone.trim())
         if (phone.isBlank()) {
             _uiState.update { it.copy(error = "Enter a phone number") }
             return
@@ -104,7 +107,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            repository.verifyOtp(state.phone.trim(), state.otpCode)
+            repository.verifyOtp(e164(state.phone.trim()), state.otpCode)
                 .onSuccess { response ->
                     sessionStore.saveSession(
                         token = response.sessionToken,
@@ -121,6 +124,25 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                             error = null
                         )
                     }
+                    // Source of truth: the server profile carries the verified
+                    // phone - refresh the stored/UI number from it so a stale
+                    // or partial local draft can never stick (e.g. bare "+91").
+                    repository.getProfile(response.sessionToken)
+                        .onSuccess { profile ->
+                            sessionStore.updateProfile(profile.displayName, profile.about, profile.avatarUrl ?: profile.photoUrl)
+                            _uiState.update {
+                                it.copy(
+                                    phone = profile.phone,
+                                    displayName = profile.displayName ?: it.displayName
+                                )
+                            }
+                            sessionStore.saveSession(
+                                token = response.sessionToken,
+                                userId = response.userId,
+                                phone = profile.phone,
+                                displayName = profile.displayName
+                            )
+                        }
                 }
                 .onFailure { e ->
                     _uiState.update { it.copy(isLoading = false, error = e.message ?: "OTP verification failed") }

@@ -170,11 +170,41 @@ data class MessageResponse(
 
 @Serializable
 data class AttachmentInfo(
-    @SerialName("attachment_id") val attachmentId: String,
+    // Nullable: the server sometimes emits attachment objects without an id
+    // (proven: history decode crashed the whole chat with MissingFieldException
+    // at $.messages[].attachments[]). Bubbles key off attachment_ids anyway.
+    @SerialName("attachment_id") val attachmentId: String? = null,
+    // History items use "id" (not "attachment_id") plus extra metadata.
+    val id: String? = null,
     val mime: String? = null,
     val filename: String? = null,
     @SerialName("byte_size") val byteSize: Long? = null
 )
+
+/**
+ * Every usable attachment reference for a message: explicit attachment_ids
+ * first, then history-style attachments[].id. Server history normalizes sent
+ * messages to attachments[] (proven via API), so both sources are needed to
+ * resolve download URLs after a reload.
+ */
+fun attachmentRefIds(message: MessageResponse): List<String> {
+    val fromObjects = message.attachments.mapNotNull { it.attachmentId ?: it.id }
+    return (message.attachmentIds + fromObjects).distinct().filter { it.isNotBlank() }
+}
+
+/**
+ * Voice duration from body. Ours sends duration_ms; peer clients (Alice)
+ * send duration in SECONDS - reading only duration_ms showed no time and
+ * was a playback-diagnosis red herring. Prefer ms, fall back to seconds*1000.
+ */
+fun voiceDurationMs(body: Map<String, kotlinx.serialization.json.JsonElement>): Long? {
+    fun readLong(key: String): Long? = try {
+        body[key]?.let { it as? kotlinx.serialization.json.JsonPrimitive }?.content?.toLongOrNull()
+    } catch (_: Exception) { null }
+    readLong("duration_ms")?.let { return it }
+    readLong("duration")?.let { sec -> if (sec > 0) return sec * 1000 }
+    return null
+}
 
 /** Group management (Category 1 Create/Participants YES; add/remove/rename/icon/role/invite/leave = backend-check, conventional Ollacore-style paths). */
 @Serializable
@@ -246,13 +276,17 @@ data class Participant(
 data class AttachmentInitResponse(
     @SerialName("attachment_id") val attachmentId: String,
     @SerialName("upload_url") val uploadUrl: String,
-    @SerialName("expires_at") val expiresAt: String
+    // PROVEN server shape: the single-part init returns "upload_expires_at"
+    // (not "expires_at") plus "required_headers". Nullable: expiry is metadata
+    // the client never acts on; a missing field must not kill the upload.
+    @SerialName("upload_expires_at") val uploadExpiresAt: String? = null,
+    @SerialName("required_headers") val requiredHeaders: List<List<String>> = emptyList()
 )
 
 @Serializable
 data class AttachmentDownloadResponse(
     @SerialName("download_url") val downloadUrl: String,
-    @SerialName("expires_at") val expiresAt: String
+    @SerialName("expires_at") val expiresAt: String? = null
 )
 
 @Serializable

@@ -11,6 +11,7 @@ import com.ollacore.app.data.e2ee.MlsMessageResult
 import com.ollacore.app.data.e2ee.RemovalReason
 import com.ollacore.app.data.model.EncryptedMessageKind
 import com.ollacore.app.data.model.MessageResponse
+import com.ollacore.app.data.model.attachmentRefIds
 import com.ollacore.app.data.remote.ChatWebSocket
 import com.ollacore.app.data.remote.WebSocketEvent
 import com.ollacore.app.data.remote.WsMessage
@@ -40,6 +41,9 @@ data class ChatUiState(
     val isConnected: Boolean = false,
     val typingUsers: Set<String> = emptySet(),
     val onlineUsers: Set<String> = emptySet(),
+    // ── History pagination (server pages oldest-first; open lands on latest) ──
+    val hasMoreHistory: Boolean = false,
+    val loadingHistory: Boolean = false,
     val replyTo: MessageResponse? = null,
     val editingMessage: MessageResponse? = null,
     val roomToken: String? = null,
@@ -58,6 +62,8 @@ data class ChatUiState(
     val participantCount: Int = 0,
     // ── Incoming call ringing (WS call.started; accept routes to the call screen) ──
     val incomingCall: IncomingCall? = null,
+    // ── Deleted-message tombstones (WhatsApp-style placeholder, live events) ──
+    val deletedIds: Set<String> = emptySet(),
     // WhatsApp-style chat upgrade (Category 1 - API YES except star/select are client-only)
     val starredIds: Set<String> = emptySet(),
     val selectedIds: Set<String> = emptySet(),
@@ -65,14 +71,20 @@ data class ChatUiState(
     val peerName: String? = null,
     val peerAvatarUrl: String? = null,
     val peerPhone: String? = null,
+    val peerUserId: String? = null,
     // ── Media & attachments (Category 1 - Ollacore API YES: init/multipart/download + WS attachment.ready/failed) ──
     val attachmentUrls: Map<String, String> = emptyMap(),
+    /** attachmentId -> epoch ms when the presigned download URL dies (server ~10 min). */
+    val attachmentUrlExpiry: Map<String, Long> = emptyMap(),
     val uploadingFilename: String? = null,
     val uploadProgress: Float = 0f,
     val isUploading: Boolean = false,
     val uploadError: String? = null,
     // ── Voice recorder draft (spec 13; sent as kind=audio which renders today) ──
-    val voiceDraft: VoiceDraft = VoiceDraft()
+    val voiceDraft: VoiceDraft = VoiceDraft(),
+    // Non-blocking recorder failures (permission, busy mic, too short).
+    // Rendered as a dismissible banner above the composer, never fullscreen.
+    val recordError: String? = null
 )
 
 data class VoiceDraft(
@@ -129,8 +141,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun joinRoom(roomId: String) {
         this.roomId = roomId
         viewModelScope.launch {
-            val token = sessionStore.sessionToken.first() ?: return@launch
+            // No session at all (logged out elsewhere): surface auth UI instead of
+            // hanging on a blank screen forever.
+            val token = sessionStore.sessionToken.first() ?: run {
+                _uiState.update { it.copy(isLoading = false, error = "session expired") }
+                return@launch
+            }
             currentUserId = sessionStore.userId.first() ?: ""
+            // Local menu enforcement must be in place BEFORE history lands.
+            blockedCache = runCatching { container.chatPrefsStore.blockedUsers.first() }.getOrElse { emptySet() }
+            clearedBeforeSeq = runCatching { container.chatPrefsStore.getClearedBefore(roomId) }.getOrNull()
 
             val device_id = "android-${UUID.randomUUID()}"
             directoryRepo.getRoomToken(token, roomId, device_id)
@@ -146,27 +166,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     directoryRepo.getInbox(token).onSuccess { inbox ->
                         inbox.conversations.find { it.roomId == roomId }?.let { item ->
                             val isGroup = item.kind.equals("group", ignoreCase = true)
+                            val serverName = if (isGroup) item.name
+                                ?: "Group" else item.name
+                                ?: item.peer?.displayName
+                                ?: item.peer?.phone
+                                ?: "Chat"
+                            // Local alias wins over the server name (contact rename).
+                            val alias = runCatching { container.chatPrefsStore.getAlias(roomId) }.getOrNull()
                             _uiState.update {
                                 it.copy(
                                     kind = item.kind,
-                                    peerName = if (isGroup) item.name
-                                        ?: "Group" else item.name
-                                        ?: item.peer?.displayName
-                                        ?: item.peer?.phone
-                                        ?: "Chat",
-                                    peerPhone = if (isGroup) null else item.peer?.phone
+                                    peerName = alias ?: serverName,
+                                    peerPhone = if (isGroup) null else item.peer?.phone,
+                                    peerUserId = if (isGroup) null else item.peer?.userId
                                 )
                             }
                             if (isGroup) loadParticipants(response.accessToken)
                         }
+                    }
+                    // Restore persisted stars for this room (bodies stay server-side).
+                    _uiState.update {
+                        it.copy(
+                            starredIds = runCatching { container.chatPrefsStore.getStarredIds(roomId) }
+                                .getOrElse { emptySet() }
+                        )
                     }
                     if (response.e2ee != null) {
                         pushConfigManager.setE2eeConfig(response.e2ee)
                     }
                     connectWebSocket(response.chatWebsocketUrl, response.accessToken)
                     loadMessages(response.accessToken)
+                    refreshMenuState()
                 }
                 .onFailure { e ->
+                    android.util.Log.w("ChatNet", "joinRoom($roomId) failed", e)
                     _uiState.update { it.copy(error = e.message ?: "Failed to join room") }
                 }
         }
@@ -231,6 +264,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
+                // Local enforcement: blocked senders + cleared watermarks never reach the list.
+                val cut = clearedBeforeSeq
+                if (msg.senderId in blockedCache || (cut != null && msg.eventSeq <= cut)) return
                 // Own-message echo: server stored it -> at least Sent ✓ (ack may arrive separately)
                 if (msg.senderId == currentUserId && msg.clientMessageId != null) {
                     setStatus(msg.clientMessageId, MessageStatus.SENT)
@@ -241,9 +277,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(messages = it.messages + response)
                 }
                 // Prefetch download URLs for new media messages (Ollacore API: GET /rooms/{id}/attachments/{aid}/download)
-                if (response.attachmentIds.isNotEmpty()) {
-                    response.attachmentIds.forEach { aid -> resolveAttachmentUrl(aid) }
-                }
+                attachmentRefIds(response).forEach { aid -> resolveAttachmentUrl(aid, auto = true) }
                 if (msg.senderId != currentUserId) {
                     chatWebSocket?.markDelivered(roomId, msg.id)
                 }
@@ -266,14 +300,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             is WebSocketEvent.AttachmentReady -> {
                 // Ollacore WS: attachment.ready -> fetch presigned download URL so bubbles can render
-                resolveAttachmentUrl(event.attachmentId)
+                signalAttachmentReady(event.attachmentId, true)
+                resolveAttachmentUrl(event.attachmentId, auto = true)
             }
             is WebSocketEvent.AttachmentFailed -> {
+                signalAttachmentReady(event.attachmentId, false)
                 _uiState.update { it.copy(uploadError = "Attachment failed: ${event.attachmentId}") }
             }
             is WebSocketEvent.MessageDeleted -> {
+                // Keep the row as a tombstone ("This message was deleted") instead
+                // of vanishing it; history reloads naturally drop it server-side.
                 _uiState.update {
-                    it.copy(messages = it.messages.filter { m -> m.id != event.messageId })
+                    it.copy(deletedIds = it.deletedIds + event.messageId)
                 }
             }
             is WebSocketEvent.ReactionAdded -> {
@@ -329,9 +367,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             is WebSocketEvent.TypingStarted -> {
-                _uiState.update { it.copy(typingUsers = it.typingUsers + event.principalId) }
+                // Ignore our own echo: the server rebroadcasts typing.started to
+                // every participant including the sender, which made the header
+                // show "typing…" while WE type (reported as own number typing).
+                if (event.principalId == currentUserId) return
+                _uiState.update {
+                    it.copy(typingUsers = (it.typingUsers + event.principalId) - currentUserId)
+                }
             }
             is WebSocketEvent.TypingStopped -> {
+                if (event.principalId == currentUserId) return
                 _uiState.update { it.copy(typingUsers = it.typingUsers - event.principalId) }
             }
             is WebSocketEvent.PresenceChanged -> {
@@ -403,7 +448,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun loadMessages(roomToken: String) {
         _uiState.update { it.copy(isLoading = true) }
-        chatRepo.listMessages(roomToken, roomId)
+        // Server pages oldest-first: a bare limit=50 returns the FIRST page, so rooms
+        // with 50+ messages opened on ancient history and latest (often own) messages
+        // never appeared. Anchor with a huge before_seq to land on the LATEST page.
+        chatRepo.listMessages(roomToken, roomId, beforeSeq = Int.MAX_VALUE)
             .onSuccess { response ->
                 // Seed history: own messages show at least Sent ✓ (live receipts upgrade to ✓✓/blue)
                 val seeded = _uiState.value.messageStatus.toMutableMap()
@@ -413,10 +461,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 _uiState.update {
-                    it.copy(messages = response.messages.sortedBy { m -> m.eventSeq }, isLoading = false, messageStatus = seeded)
+                    val liveIds = response.messages.map { it.id }.toSet()
+                    it.copy(
+                        messages = applyLocalViewFilter(response.messages.sortedBy { m -> m.eventSeq }),
+                        isLoading = false,
+                        error = null,
+                        messageStatus = seeded,
+                        // Drop tombstones the server no longer returns.
+                        deletedIds = it.deletedIds.intersect(liveIds),
+                        hasMoreHistory = response.hasMore,
+                        loadingHistory = false
+                    )
                 }
                 // Prefetch download URLs for media messages so bubbles render immediately
-                response.messages.flatMap { it.attachmentIds }.distinct().forEach { aid -> resolveAttachmentUrl(aid) }
+                response.messages.flatMap { attachmentRefIds(it) }.distinct().forEach { aid -> resolveAttachmentUrl(aid, auto = true) }
                 if (response.messages.isNotEmpty()) {
                     val lastMsg = response.messages.maxByOrNull { it.eventSeq }
                     if (lastMsg != null) {
@@ -425,6 +483,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             .onFailure { e ->
+                android.util.Log.w("ChatNet", "loadMessages($roomId) failed", e)
                 _uiState.update { it.copy(isLoading = false, error = e.message) }
             }
     }
@@ -510,13 +569,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleStar(messageId: String) {
+        // Optimistic UI first, then persist per room (star has no Ollacore API;
+        // reactions stay separate via addReaction).
         _uiState.update {
             val starred = it.starredIds.toMutableSet()
             if (messageId in starred) starred.remove(messageId) else starred.add(messageId)
             it.copy(starredIds = starred)
         }
-        // Client-only: persisted locally (star is not an Ollacore API reactions; reactions are separate via addReaction)
-        // Could persist via DataStore if needed
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.toggleStar(roomId, messageId) }
+        }
     }
 
     fun toggleSelect(messageId: String) {
@@ -531,8 +593,290 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(selectedIds = emptySet(), selectionMode = false) }
     }
 
+    /** Enter selection mode with nothing pre-selected (3-dot menu entry point). */
+    fun enterSelectionMode() {
+        _uiState.update { it.copy(selectionMode = true) }
+    }
+
     fun isStarred(messageId: String): Boolean = messageId in _uiState.value.starredIds
     fun isSelected(messageId: String): Boolean = messageId in _uiState.value.selectedIds
+
+    // ── 3-dot chat menu state + actions (Category 1 wired where APIs exist;
+    //   the rest persist client-side with backend-spec hooks, never faked) ──
+
+    data class ChatMenuState(
+        val isFavourite: Boolean = false,
+        val muteUntilMs: Long? = null,
+        val disappearingTtlSec: Long = 0L,
+        /** Global default prefill when the room has no explicit choice. */
+        val defaultDisappearingTtlSec: Long = 0L,
+        val isBlocked: Boolean = false,
+        val isArchived: Boolean = false,
+        val allLists: Map<String, List<String>> = emptyMap(),
+        val memberOfLists: Set<String> = emptySet(),
+        val cleared: Boolean = false
+    )
+
+    data class CallCandidate(val userId: String, val name: String, val phone: String)
+
+    private val _menuState = MutableStateFlow(ChatMenuState())
+    val menuState: StateFlow<ChatMenuState> = _menuState.asStateFlow()
+
+    // Local enforcement caches (block + clear watermarks apply to live + history).
+    private var blockedCache: Set<String> = emptySet()
+    private var clearedBeforeSeq: Int? = null
+
+    /**
+     * Server validates attachments ASYNCHRONOUSLY after complete: sending the
+     * message blindly races validation (rejected sends died silently as
+     * invisible FAILED statuses). Wait for the ready/failed signal instead.
+     */
+    private val attachmentReadySignals =
+        mutableMapOf<String, kotlinx.coroutines.CompletableDeferred<Boolean>>()
+
+    private suspend fun awaitAttachmentReady(attachmentId: String): Boolean {
+        val signal = synchronized(attachmentReadySignals) {
+            attachmentReadySignals.getOrPut(attachmentId) {
+                kotlinx.coroutines.CompletableDeferred()
+            }
+        }
+        return try {
+            kotlinx.coroutines.withTimeout(60_000) { signal.await() }
+        } catch (_: Exception) {
+            false
+        } finally {
+            synchronized(attachmentReadySignals) {
+                if (attachmentReadySignals[attachmentId] === signal) {
+                    attachmentReadySignals.remove(attachmentId)
+                }
+            }
+        }
+    }
+
+    private fun signalAttachmentReady(attachmentId: String, ready: Boolean) {
+        synchronized(attachmentReadySignals) {
+            attachmentReadySignals.remove(attachmentId)
+        }?.let { deferred ->
+            if (!deferred.isCompleted) deferred.complete(ready)
+        }
+    }
+
+    private fun peerIdsForBlock(): Set<String> {
+        val ids = _uiState.value.participantNames.keys.toMutableSet()
+        _uiState.value.peerUserId?.takeIf { it.isNotBlank() }?.let { ids.add(it) }
+        ids.remove(currentUserId)
+        return ids
+    }
+
+    fun refreshMenuState() {
+        viewModelScope.launch {
+            val prefs = container.chatPrefsStore
+            blockedCache = runCatching {
+                prefs.blockedUsers.first()
+            }.getOrElse { emptySet() }
+            clearedBeforeSeq = runCatching { prefs.getClearedBefore(roomId) }.getOrNull()
+            _menuState.value = ChatMenuState(
+                isFavourite = runCatching {
+                    prefs.favouriteRooms.first().contains(roomId)
+                }.getOrElse { false },
+                muteUntilMs = runCatching { prefs.getMuteUntil(roomId) }.getOrNull(),
+                disappearingTtlSec = runCatching { prefs.getDisappearingTtl(roomId) }.getOrElse { 0L },
+                defaultDisappearingTtlSec = runCatching {
+                    prefs.getCustom(
+                        com.ollacore.app.data.local.ChatPrefsStore.SettingsKeys.DISAPPEAR_DEFAULT, "0"
+                    ).toLongOrNull() ?: 0L
+                }.getOrElse { 0L },
+                isBlocked = peerIdsForBlock().any { it in blockedCache },
+                isArchived = runCatching {
+                    prefs.archivedRooms.first().contains(roomId)
+                }.getOrElse { false },
+                allLists = runCatching {
+                    prefs.chatLists.first()
+                }.getOrElse { emptyMap() },
+                memberOfLists = runCatching { prefs.listsForRoom(roomId) }.getOrElse { emptySet() },
+                cleared = clearedBeforeSeq != null
+            )
+        }
+    }
+
+    /** Clear-chat watermark + blocked-sender drop (local view only; server untouched). */
+    private fun applyLocalViewFilter(msgs: List<MessageResponse>): List<MessageResponse> {
+        val cut = clearedBeforeSeq
+        return msgs.filter { m ->
+            (cut == null || m.eventSeq > cut) && m.senderId !in blockedCache
+        }
+    }
+
+    fun toggleFavourite() {
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.toggleFavourite(roomId) }
+            refreshMenuState()
+        }
+    }
+
+    /** durationMs null = unmute; otherwise mute until now+duration (MUTE_ALWAYS = forever). */
+    fun setMuteDuration(durationMs: Long?) {
+        viewModelScope.launch {
+            val until = durationMs?.let {
+                if (it == com.ollacore.app.data.local.ChatPrefsStore.MUTE_ALWAYS) it
+                else System.currentTimeMillis() + it
+            }
+            runCatching { container.chatPrefsStore.setMuteUntil(roomId, until) }
+            refreshMenuState()
+        }
+    }
+
+    fun setDisappearingTtl(ttlSec: Long) {
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.setDisappearingTtl(roomId, ttlSec) }
+            refreshMenuState()
+        }
+    }
+
+    fun toggleBlock(): Boolean {
+        val ids = peerIdsForBlock()
+        if (ids.isEmpty()) return _menuState.value.isBlocked
+        val nowBlocked = ids.any { it in blockedCache }
+        viewModelScope.launch {
+            ids.forEach { runCatching { container.chatPrefsStore.setUserBlocked(it, !nowBlocked) } }
+            // Update the cache synchronously (same scope/thread): refreshMenuState()
+            // reloads it in a sibling coroutine, which previously raced the filter.
+            blockedCache = if (nowBlocked) blockedCache - ids else blockedCache + ids
+            refreshMenuState()
+            if (nowBlocked) {
+                // Unblocked: reload history so messages hidden while blocked return
+                // (server history is untouched by local block).
+                _uiState.value.roomToken?.let { loadMessages(it) }
+            } else {
+                // Blocked: drop their bubbles from the visible list immediately.
+                _uiState.update { it.copy(messages = applyLocalViewFilter(it.messages)) }
+            }
+        }
+        return !nowBlocked
+    }
+
+    fun submitReport(reason: String) {
+        viewModelScope.launch {
+            val label = _uiState.value.peerName ?: "Chat"
+            runCatching { container.chatPrefsStore.submitReport(roomId, label, reason) }
+        }
+    }
+
+    fun createChatList(name: String, onDone: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = runCatching { container.chatPrefsStore.createChatList(name) }.getOrElse { false }
+            refreshMenuState()
+            onDone(ok)
+        }
+    }
+
+    fun setRoomInList(listName: String, member: Boolean) {
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.setRoomInList(listName, roomId, member) }
+            refreshMenuState()
+        }
+    }
+
+    fun setArchived(archived: Boolean, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.setArchived(roomId, archived) }
+            refreshMenuState()
+            onDone()
+        }
+    }
+
+    /** Clear chat: hides everything at/under the current max seq locally (server kept). */
+    fun clearChat(onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            val maxSeq = _uiState.value.messages.maxOfOrNull { it.eventSeq }
+            if (maxSeq != null) {
+                runCatching { container.chatPrefsStore.setClearedBefore(roomId, maxSeq) }
+                clearedBeforeSeq = maxSeq
+                _uiState.update {
+                    it.copy(
+                        messages = applyLocalViewFilter(it.messages),
+                        replyTo = null,
+                        selectedIds = emptySet(),
+                        selectionMode = false
+                    )
+                }
+            }
+            refreshMenuState()
+            onDone()
+        }
+    }
+
+    /**
+     * Delete chat: groups leave via API (DELETE rooms/{id}/members/me) then wipe local
+     * view + archive; 1-to-1 has no delete-conversation endpoint (backend spec gap),
+     * so it wipes the local view + archives (inbox row returns only on new messages).
+     */
+    fun clearChatError() {
+        _uiState.update { it.copy(error = null) }
+    }
+
+    suspend fun deleteChat(): Boolean {
+        val token = _uiState.value.roomToken
+        val isGroup = _uiState.value.kind.equals("group", ignoreCase = true)
+        if (isGroup && token != null) {
+            val left = chatRepo.leaveGroup(token, roomId)
+            if (left.isFailure) {
+                // Stay put and say why: no silent fake-delete (leave endpoint 404s today).
+                _uiState.update {
+                    it.copy(error = "Couldn't leave the group: ${left.exceptionOrNull()?.message ?: "server rejected"}")
+                }
+                return false
+            }
+        }
+        runCatching { container.chatPrefsStore.setClearedBefore(roomId, Int.MAX_VALUE) }
+        runCatching { container.chatPrefsStore.setArchived(roomId, true) }
+        clearedBeforeSeq = Int.MAX_VALUE
+        _uiState.update {
+            it.copy(
+                messages = emptyList(),
+                replyTo = null,
+                selectedIds = emptySet(),
+                selectionMode = false
+            )
+        }
+        refreshMenuState()
+        return true
+    }
+
+    /** Generates a unique call link, posts it in the chat, and returns it for sharing. */
+    fun sendCallLink(onLink: (String) -> Unit) {
+        val link = "https://call.ollacore.com/${UUID.randomUUID()}"
+        sendMessage("📞 Join my call: $link")
+        onLink(link)
+    }
+
+    /** Group call = create a real group conversation (existing API) then call there. */
+    fun startGroupCall(name: String, memberIds: List<String>, onRoom: (String?) -> Unit) {
+        viewModelScope.launch {
+            val token = sessionStore.sessionToken.first() ?: run { onRoom(null); return@launch }
+            val clean = memberIds.filter { it.isNotBlank() }.distinct()
+            if (clean.isEmpty()) { onRoom(null); return@launch }
+            val res = directoryRepo.createGroupConversation(
+                token, clean, name.ifBlank { "Group call" }
+            )
+            onRoom(res.getOrNull()?.roomId)
+        }
+    }
+
+    /** Call/group-call candidates: inbox direct peers (existing API, no new endpoint). */
+    suspend fun loadCallCandidates(): List<CallCandidate> {
+        val token = sessionStore.sessionToken.first() ?: return emptyList()
+        val inbox = directoryRepo.getInbox(token).getOrNull() ?: return emptyList()
+        return inbox.conversations.mapNotNull { item ->
+            val peer = item.peer ?: return@mapNotNull null
+            if (peer.userId == currentUserId) return@mapNotNull null
+            CallCandidate(
+                userId = peer.userId,
+                name = peer.displayName ?: peer.phone,
+                phone = peer.phone
+            )
+        }.distinctBy { it.userId }
+    }
 
     fun copyText(message: MessageResponse): String {
         return message.body["text"]?.let { try { it.jsonPrimitive.content } catch (_: Exception) { "" } } ?: ""
@@ -543,14 +887,64 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // Kinds: image / video / audio / file (Ollacore-native, WhatsApp-style UI only). Location = kind "location" (backend check required).
     private val attachmentUploader = com.ollacore.app.data.remote.AttachmentUploader()
 
-    fun resolveAttachmentUrl(attachmentId: String) {
+    /** attachmentId -> presigned URL; paired with [attachmentUrlExpiry] (server ~10 min TTL). */
+    private val resolvingIds = mutableSetOf<String>()
+
+    /**
+     * Resolves a presigned download URL. auto=true marks BACKGROUND prefetch
+     * (history bulk, attachment.ready); Settings > Storage > Media
+     * auto-download gates only prefetch - tapping a bubble to view always
+     * resolves on demand.
+     *
+     * force=true drops a cached URL first (playback hit an expired/403 link).
+     * Cached URLs also re-fetch when expires_at is past (within 30s skew) -
+     * proven download links live ~10 minutes; stale cache made old voice
+     * bubbles fail MediaPlayer prepare with no UI feedback.
+     */
+    fun resolveAttachmentUrl(attachmentId: String, auto: Boolean = false, force: Boolean = false) {
         val token = _uiState.value.roomToken ?: return
-        if (_uiState.value.attachmentUrls.containsKey(attachmentId)) return
+        if (force) {
+            _uiState.update {
+                it.copy(
+                    attachmentUrls = it.attachmentUrls - attachmentId,
+                    attachmentUrlExpiry = it.attachmentUrlExpiry - attachmentId
+                )
+            }
+        } else if (_uiState.value.attachmentUrls.containsKey(attachmentId)) {
+            val exp = _uiState.value.attachmentUrlExpiry[attachmentId]
+            val stillFresh = exp != null && exp > System.currentTimeMillis() + 30_000L
+            val unknownExpiry = exp == null
+            // Unknown expiry keeps legacy cache behaviour; known-past expiry re-fetches.
+            if (stillFresh || unknownExpiry) return
+        }
+        if (!resolvingIds.add(attachmentId)) return
         viewModelScope.launch {
-            chatRepo.downloadAttachment(token, roomId, attachmentId)
-                .onSuccess { resp ->
-                    _uiState.update { it.copy(attachmentUrls = it.attachmentUrls + (attachmentId to resp.downloadUrl)) }
+            try {
+                if (auto) {
+                    val allowed = runCatching {
+                        container.chatPrefsStore.getCustomBool(
+                            com.ollacore.app.data.local.ChatPrefsStore.SettingsKeys.AUTO_DOWNLOAD, true
+                        )
+                    }.getOrElse { true }
+                    if (!allowed) return@launch
                 }
+                chatRepo.downloadAttachment(token, roomId, attachmentId)
+                    .onSuccess { resp ->
+                        val expMs = runCatching {
+                            resp.expiresAt?.let { java.time.Instant.parse(it).toEpochMilli() }
+                        }.getOrNull()
+                        _uiState.update {
+                            it.copy(
+                                attachmentUrls = it.attachmentUrls + (attachmentId to resp.downloadUrl),
+                                attachmentUrlExpiry = if (expMs != null) {
+                                    it.attachmentUrlExpiry + (attachmentId to expMs)
+                                } else it.attachmentUrlExpiry
+                            )
+                        }
+                    }
+            } finally {
+                resolvingIds.remove(attachmentId)
+            }
         }
     }
 
@@ -669,9 +1063,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         uploadCancelled = false
         failedUpload = null
+        android.util.Log.d("Upload", "launching upload coroutine for ${file.name}")
         viewModelScope.launch {
+            android.util.Log.d("Upload", "coroutine entered for ${file.name}")
             _uiState.update { it.copy(isUploading = true, uploadingFilename = file.name, uploadProgress = 0f, uploadError = null) }
+            // Hard ceiling: OkHttp timeouts don't cover DNS stalls, so no upload
+            // may hang forever - it must end in sent/stuck UI or a clear error.
+            // (Covers network legs plus the 60s attachment.ready wait below.)
             try {
+                kotlinx.coroutines.withTimeout(240_000) {
                 check(!uploadCancelled) { "cancelled" }
                 val byteSize = file.length()
                 val attachmentId: String = if (byteSize > SINGLE_PUT_THRESHOLD) {
@@ -692,28 +1092,42 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             com.ollacore.app.data.model.MultipartPart(num, etag)
                         }).getOrThrow()
                     }
+                    if (!awaitAttachmentReady(init.attachmentId)) {
+                        throw Exception("Server could not prepare the attachment - please retry")
+                    }
                     init.attachmentId
                 } else {
                     // Single PUT: init -> PUT -> complete
                     val init = withContext(Dispatchers.IO) {
                         chatRepo.initAttachment(roomToken, roomId, file.name, mimeType, byteSize).getOrThrow()
                     }
+                    android.util.Log.d("Upload", "init done id=${init.attachmentId}")
                     check(!uploadCancelled) { "cancelled" }
                     _uiState.update { it.copy(uploadProgress = 0.4f) }
                     withContext(Dispatchers.IO) {
                         attachmentUploader.uploadToPresignedUrl(init.uploadUrl, file, mimeType)
                     }
+                    android.util.Log.d("Upload", "PUT done id=${init.attachmentId}")
                     check(!uploadCancelled) { "cancelled" }
                     _uiState.update { it.copy(uploadProgress = 0.7f) }
                     withContext(Dispatchers.IO) {
                         chatRepo.completeAttachment(roomToken, roomId, init.attachmentId).getOrThrow()
                     }
+                    android.util.Log.d("Upload", "complete done id=${init.attachmentId}")
+                    // Wait for the server's async validation BEFORE referencing the
+                    // attachment in a message; otherwise the send is rejected and
+                    // the failure is invisible (no bubble exists yet to mark Failed).
+                    if (!awaitAttachmentReady(init.attachmentId)) {
+                        throw Exception("Server could not prepare the attachment - please retry")
+                    }
+                    android.util.Log.d("Upload", "attachment ready id=${init.attachmentId}")
                     init.attachmentId
                 }
                 _uiState.update { it.copy(uploadProgress = 0.9f) }
                 sendMediaMessage(kind, caption.ifBlank { file.name }, listOf(attachmentId), mimeType, file.name, byteSize, durationMs, waveform)
                 // attachment.ready WS will arrive -> resolveAttachmentUrl prefetches download URL
                 _uiState.update { it.copy(isUploading = false, uploadProgress = 1f, uploadingFilename = null) }
+                }
             } catch (e: Exception) {
                 val wasCancel = uploadCancelled || e.message == "cancelled"
                 if (!wasCancel && file.exists()) {
@@ -749,23 +1163,53 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ── Voice recorder (spec 13): tap mic -> live bar -> send as audio file ──
-    // No voice_note backend exists, so recordings travel as kind=audio with
-    // duration_ms + waveform body fields (server passes body through).
+    // No voice_note backend exists, and message kind "audio" is rejected with
+    // 400 "unsupported message kind audio" (proven 2026-09-24), so recordings
+    // travel as kind=file with audio mime + duration_ms + waveform body fields
+    // (server passes body through; bubbles key off the audio/* MIME).
 
     private var recorder: android.media.MediaRecorder? = null
     private var recordFile: File? = null
     private var recordJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * Starts a voice recording (AAC in M4A - MediaRecorder has no MP3
+     * encoder, so MP3 was never an option; the old ".mp3" label was UI text).
+     * Order source -> format -> encoder -> rate -> file -> prepare -> start
+     * is mandatory. A fresh instance is built per attempt; released instances
+     * are never reused.
+     */
     fun startRecording() {
         if (_uiState.value.voiceDraft.isRecording) return
+        _uiState.update { it.copy(recordError = null) }
+        val app = getApplication<android.app.Application>()
+        // Backstop: the UI requests this first, but never assume the grant.
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                app, android.Manifest.permission.RECORD_AUDIO
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            _uiState.update {
+                it.copy(recordError = "Microphone permission is needed to record voice messages.")
+            }
+            return
+        }
         try {
-            val app = getApplication<android.app.Application>()
             val file = File(app.cacheDir, "voice_${System.currentTimeMillis()}.m4a")
-            val rec = android.media.MediaRecorder().apply {
+            val rec = if (android.os.Build.VERSION.SDK_INT >= 31) {
+                android.media.MediaRecorder(app)
+            } else {
+                @Suppress("DEPRECATION")
+                android.media.MediaRecorder()
+            }.apply {
                 setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
                 setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC)
+                // Explicit voice-safe params: mono 44.1kHz AAC-LC. Defaults
+                // vary by device (stereo/unset rate) and the server-side audio
+                // probe rejects some of them (attachment.failed after upload).
+                setAudioChannels(1)
                 setAudioSamplingRate(44100)
+                setAudioEncodingBitRate(128000)
                 setOutputFile(file.absolutePath)
                 prepare()
                 start()
@@ -793,39 +1237,78 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         } catch (e: Exception) {
-            _uiState.update { it.copy(error = "Recording failed: ${e.message}") }
+            cleanupRecorder(deleteFile = true)
+            val msg = when {
+                // Mic held by a call/another app, or device has no mic path.
+                e is RuntimeException -> "Microphone is busy or unavailable. Close other apps using it and try again."
+                else -> "Recording failed: ${e.message ?: e.javaClass.simpleName}"
+            }
+            _uiState.update { it.copy(recordError = msg) }
+        }
+    }
+
+    /** Stops + releases the recorder exactly once; never throws. */
+    private fun cleanupRecorder(deleteFile: Boolean) {
+        recordJob?.cancel()
+        recordJob = null
+        // stop() throws if nothing was captured (very short tap) - then the
+        // file is unusable, so it is dropped in sendRecording's checks.
+        runCatching { recorder?.stop() }
+        runCatching { recorder?.release() }
+        recorder = null
+        if (deleteFile) {
+            recordFile?.delete()
+            recordFile = null
         }
     }
 
     fun cancelRecording() {
-        recordJob?.cancel()
-        recordJob = null
-        runCatching { recorder?.stop() }
-        runCatching { recorder?.release() }
-        recorder = null
-        recordFile?.delete()
-        recordFile = null
-        _uiState.update { it.copy(voiceDraft = VoiceDraft()) }
+        cleanupRecorder(deleteFile = true)
+        _uiState.update { it.copy(voiceDraft = VoiceDraft(), recordError = null) }
     }
 
     fun sendRecording() {
         val draft = _uiState.value.voiceDraft
+        android.util.Log.d("Record", "send tap: recording=${draft.isRecording} elapsed=${draft.elapsedMs} amps=${draft.amplitudes.size}")
         if (!draft.isRecording) return
-        recordJob?.cancel()
-        recordJob = null
-        runCatching { recorder?.stop() }
-        runCatching { recorder?.release() }
-        recorder = null
+        cleanupRecorder(deleteFile = false)
         val file = recordFile
         recordFile = null
         val duration = draft.elapsedMs
         val wave = draft.amplitudes.takeLast(40)
         _uiState.update { it.copy(voiceDraft = VoiceDraft()) }
-        if (file != null && file.exists() && duration > 500) {
-            uploadAndSendFile(file, "audio/mp4", com.ollacore.app.data.model.MessageKinds.AUDIO, "", duration, wave)
+        android.util.Log.d(
+            "Record",
+            "send checks: exists=${file?.exists()} size=${file?.length()} duration=$duration"
+        )
+        // Server accepts only the M4A major brand for audio (mp42/isom fail
+        // its probe even though the bytes are valid AAC). Stamp it truthfully.
+        if (file != null) {
+            runCatching { com.ollacore.app.data.util.MimeValidator.ensureM4aBrand(file) }
+        }
+        // Verified sendable: real file, non-zero bytes, audible length.
+        // kind=file (NOT audio): the server rejects message kind "audio" with
+        // 400 "unsupported message kind audio" (proven via API). The bubble
+        // still renders the voice player: rendering keys off the audio/* MIME.
+        if (file != null && file.exists() && file.length() > 1024 && duration > 500) {
+            uploadAndSendFile(file, "audio/mp4", com.ollacore.app.data.model.MessageKinds.FILE, "", duration, wave)
         } else {
             file?.delete()
+            if (file != null) {
+                _uiState.update {
+                    it.copy(recordError = "That recording is too short or empty - hold to record, then send.")
+                }
+            }
         }
+    }
+
+    fun clearRecordError() {
+        _uiState.update { it.copy(recordError = null) }
+    }
+
+    /** Leaving the screen with a live recording: stop + release, drop the temp file. */
+    private fun releaseRecorderOnDestroy() {
+        cleanupRecorder(deleteFile = true)
     }
 
     companion object {
@@ -851,8 +1334,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadMore(beforeSeq: Int) {
+        if (_uiState.value.loadingHistory) return
         val roomToken = _uiState.value.roomToken ?: return
         viewModelScope.launch {
+            _uiState.update { it.copy(loadingHistory = true) }
             chatRepo.listMessages(roomToken, roomId, beforeSeq = beforeSeq)
                 .onSuccess { response ->
                     _uiState.update {
@@ -862,8 +1347,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 seeded[m.id] = MessageStatus.SENT
                             }
                         }
-                        it.copy(messages = response.messages.sortedBy { m -> m.eventSeq } + it.messages, messageStatus = seeded)
+                        // Dedupe by id: live echoes may already hold items the page returns.
+                        val known = it.messages.map { m -> m.id }.toSet()
+                        val fresh = response.messages.filter { m -> m.id !in known }.sortedBy { m -> m.eventSeq }
+                        it.copy(
+                            messages = applyLocalViewFilter(fresh + it.messages),
+                            messageStatus = seeded,
+                            hasMoreHistory = response.hasMore,
+                            loadingHistory = false
+                        )
                     }
+                }
+                .onFailure {
+                    _uiState.update { it.copy(loadingHistory = false) }
                 }
         }
     }
@@ -960,6 +1456,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        releaseRecorderOnDestroy()
         super.onCleared()
         chatWebSocket?.disconnect()
     }

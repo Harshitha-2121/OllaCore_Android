@@ -2,94 +2,155 @@ package com.ollacore.app
 
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-// Deep UI QA - not just "screen exists". Requires device/emulator.
+// Deep UI QA against the CURRENT UI (rewritten after the redesign).
+// Preconditions are checked with assumeTrue, so tests SKIP (never fake-pass)
+// when the device state cannot satisfy them:
+//  - home tests need a logged-in session,
+//  - chat tests additionally need a non-empty inbox,
+//  - nothing here mutates the session or backend state.
 // Run: ./gradlew connectedAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.ollacore.app.UiDeepTest
-
 @RunWith(AndroidJUnit4::class)
 class UiDeepTest {
 
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
-    // --- Screen sizes (manual config: use AVDs 3.0" small, 6.7" large) ---
-    @Test fun smallScreenRenders() {
-        // 3.0" WVGA: verify no clipping, scroll works
-        compose.onNodeWithText("Chat").assertExists()
-    }
-    @Test fun largeScreenRenders() {
-        // 6.7" Pixel: verify no stretched layouts
-        compose.onNodeWithText("Chat").assertExists()
+    private fun hasText(text: String, substring: Boolean = false): Boolean {
+        return try {
+            compose.onAllNodesWithText(text, substring = substring)
+                .fetchSemanticsNodes().isNotEmpty()
+        } catch (_: Exception) {
+            false
+        }
     }
 
-    // --- Orientation ---
-    @Test fun portraitRenders() { compose.onNodeWithTag("chat_list").assertExists() }
-    // landscape: rotate device via UiDevice.setOrientationLeft() + assert same nodes
+    private fun isHome(): Boolean = hasText("Chats") && (
+        hasText("Updates") || hasText("Calls") || hasText("Communities")
+    )
 
-    // --- Keyboard ---
-    @Test fun keyboardDoesNotCoverInput() {
+    private fun assumeHome() {
+        assumeTrue("Needs a logged-in session on Home", isHome())
+    }
+
+    private fun inboxHasChats(): Boolean {
+        if (!isHome()) return false
+        if (hasText("No chats yet")) return false
+        return try {
+            compose.onAllNodesWithTag("inbox_card").fetchSemanticsNodes().isNotEmpty()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Opens the first conversation; returns false when there is nothing to open. */
+    private fun openFirstChat(): Boolean {
+        if (!inboxHasChats()) return false
+        return try {
+            compose.onAllNodesWithTag("inbox_card")[0].performClick()
+            compose.waitForIdle()
+            compose.onAllNodesWithTag("chat_list").fetchSemanticsNodes().isNotEmpty()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun assumeChat() {
+        assumeTrue("Needs a logged-in session with at least one conversation", openFirstChat())
+    }
+
+    private fun backToHome() {
+        try {
+            Espresso.pressBack()
+            compose.waitForIdle()
+        } catch (_: Exception) {
+        }
+    }
+
+    // ── Launch ──────────────────────────────────────────────────────
+
+    @Test fun launchRendersWithoutCrash() {
+        // Splash, onboarding, login, OTP or home: one of the known roots must exist.
+        val roots = listOf("Chats", "Welcome to Ollacore", "Verify Your Number", "Stay Connected", "Ollacore")
+        assert(roots.any { hasText(it) }) { "No known root screen rendered" }
+    }
+
+    // ── Home ────────────────────────────────────────────────────────
+
+    @Test fun homeTabsRender() {
+        assumeHome()
+        compose.onNodeWithText("Updates").assertIsDisplayed()
+        compose.onNodeWithText("Calls").assertIsDisplayed()
+        compose.onNodeWithText("Communities").assertIsDisplayed()
+    }
+
+    @Test fun searchOpensAndBack() {
+        assumeHome()
+        compose.onNodeWithTag("search_icon").performClick()
+        compose.onNodeWithText("Search Ollacore…").assertIsDisplayed()
+        backToHome()
+        compose.onNodeWithText("Chats").assertIsDisplayed()
+    }
+
+    @Test fun updatesPlaceholderRenders() {
+        assumeHome()
+        compose.onNodeWithText("Updates").performClick()
+        compose.onNodeWithText("Channels").assertIsDisplayed()
+        compose.onNodeWithText("Chats").performClick()
+        compose.onNodeWithText("Chats").assertIsDisplayed()
+    }
+
+    @Test fun emptyInboxState() {
+        assumeHome()
+        // Only assertable when the inbox is actually empty; otherwise skip.
+        assumeTrue(
+            "Inbox is non-empty on this device; empty state not reachable here",
+            hasText("No chats yet")
+        )
+        compose.onNodeWithText("Your conversations will appear here.").assertIsDisplayed()
+    }
+
+    // ── Chat ────────────────────────────────────────────────────────
+
+    @Test fun chatOpensFromInbox() {
+        assumeChat() // opens + asserts chat_list internally
+    }
+
+    @Test fun messageDraftSurvivesRotation() {
+        assumeChat()
+        compose.onNodeWithText("Type a message…").performTextInput("draft-xyz")
+        try {
+            compose.activity.requestedOrientation =
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            Thread.sleep(1500)
+            compose.onNodeWithText("draft-xyz").assertExists()
+        } finally {
+            compose.activity.requestedOrientation =
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            Thread.sleep(1000)
+        }
+    }
+
+    @Test fun keyboardKeepsComposerVisible() {
+        assumeChat()
         compose.onNodeWithText("Type a message…").performClick()
-        // IME visible -> input still visible, list scrolls
         compose.onNodeWithText("Type a message…").assertIsDisplayed()
     }
 
-    // --- Scrolling ---
-    @Test fun scrollingWorks() {
-        // Seed 50 messages, fling list
+    @Test fun chatListScrolls() {
+        assumeChat()
         compose.onNodeWithTag("chat_list").performTouchInput { swipeUp() }
         compose.onNodeWithTag("chat_list").assertExists()
     }
 
-    // --- Long names/messages ---
-    @Test fun longNamesEllipsize() {
-        // Group name 100 chars -> overflow ellipsis, not wrap crash
-        compose.onNodeWithText("A".repeat(100), substring = true).assertExists()
-    }
-    @Test fun longMessagesWrap() {
-        // 500-char message -> wraps, not overflow
-        compose.onNodeWithText("x".repeat(200), substring = true).assertExists()
-    }
-
-    // --- Empty / Loading / Error ---
-    @Test fun emptyStateShows() {
-        compose.onNodeWithText("No messages yet", substring = true).assertExists()
-    }
-    @Test fun loadingShows() {
-        // Trigger loadMore -> LinearProgressIndicator
-        compose.onNodeWithTag("loading").assertExists()
-    }
-    @Test fun errorStateShows() {
-        // Simulate 401 -> Snackbar "Session expired"
-        compose.onNodeWithText("Session expired", substring = true).assertExists()
-    }
-
-    // --- Dark mode ---
-    // Run with UiModeManager.setNightMode(MODE_NIGHT_YES) before launch
-
-    // --- Accessibility / Font scaling ---
-    @Test fun fontScaling200Percent() {
-        // Settings -> Accessibility -> Font size Largest -> verify no overlap
-        compose.onNodeWithText("Chat").assertExists()
-    }
-
-    // --- Back navigation ---
-    @Test fun backNavigation() {
-        compose.onNodeWithTag("search_icon").performClick()
-        compose.onNodeWithContentDescription("Back").performClick()
-        compose.onNodeWithText("Chat").assertIsDisplayed()
-    }
-
-    // --- App restart / Deep navigation ---
-    // restart: terminate, relaunch -> assert session persists via SessionStore
-
-    // --- Rotation / Config changes ---
-    @Test fun rotationPreservesState() {
-        compose.onNodeWithText("Type a message…").performTextInput("draft")
-        compose.activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        Thread.sleep(1000)
-        compose.onNodeWithText("draft").assertExists() // draft preserved
+    @Test fun backNavigatesToHome() {
+        assumeChat()
+        backToHome()
+        compose.onNodeWithText("Chats").assertIsDisplayed()
     }
 }

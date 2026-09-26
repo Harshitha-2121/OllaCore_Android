@@ -49,6 +49,28 @@ VOICE MESSAGES: Needs kind + metadata support (attachments already generic).
 Gap: SendMessageRequest.kind has no voice-note convention; no duration/waveform
 contract; composer mic is a placeholder (ChatScreen.kt).
 
+PROVEN 2026-09-24 (device + API forensics, client works around both):
+1. POST /v1/rooms/{id}/messages rejects kind="audio" with 400
+   {"code":"invalid_request","message":"invalid request: unsupported message kind audio"}.
+   Android sends voice as kind=file + audio mime + duration_ms + waveform
+   (body passes through; accepted). Server should either accept kind=audio
+   or document kind=file as THE voice convention.
+2. Async attachment validation accepts ONLY the M4A ftyp major brand for
+   audio: identical AAC bytes with mp42/isom brand fail (attachment.failed),
+   with "M4A " brand they go ready. Android stamps the brand client-side, but
+   the server should accept mp42/isom audio too (MediaRecorder always stamps
+   those) - or document the M4A requirement.
+3. The attachment init allowlist rejects audio/wav ("unsupported media type")
+   while accepting audio/mp4. Document the allowed audio set.
+4. PROVEN 2026-09-24: GET /v1/rooms/{id}/messages can return kind=file
+   voice rows (peer webm/opus, is_voice_note=true) with body.byte_size and
+   NO attachment_ids and NO attachments[] - there is no way for any client
+   to obtain a download URL. Either always link the uploaded attachment id
+   on the message, or expose GET /v1/rooms/{id}/messages/{id}/attachments.
+5. Presigned download URLs expire in ~10 minutes (expires_at). Clients must
+   re-fetch on playback failure; a message-id-scoped stable URL would remove
+   that round-trip.
+
 A. Contract (NO new endpoint; extends existing message send)
    kind: "voice_note"
    body: { "text": "<optional caption>",
@@ -175,5 +197,44 @@ POST   /v1/directory/backup -> { "export_url", "expires_at" }  (server snapshot;
 E2EE rooms export ciphertext + key envelope only)
 GET    /v1/directory/backup -> { "exports": [...] }
 If declined, Android does encrypted local export (Room/DataStore dump) only.
+
+CHAT MENU GAPS (3-dot overflow ships client-side first; server should follow).
+-----------------------------------------------------------------------------
+Android 3-dot menu (ChatOverflowMenu + ChatPrefsStore + ChatViewModel menu
+actions) enforces these locally TODAY; each needs a server counterpart for
+cross-device truth. Nothing is faked: the UI states the local-only scope
+where it matters (block dialog, disappearing note, report queue note,
+clear-chat dialog, delete-chat dialog).
+1. Block list (replaces local drop):
+   POST   /v1/directory/blocks { "user_id" } | DELETE /v1/directory/blocks/{user_id}
+   GET    /v1/directory/blocks -> { "user_ids": [...] }
+   Server must: reject/filter messages from blocked senders, withhold presence
+   + receipts, exclude blocked rooms from inbox/unread. Android then swaps
+   ChatPrefsStore.blockedUsers for this store (same call sites).
+2. Reports (replaces local queue):
+   POST   /v1/directory/reports
+     body: { "room_id", "peer_user_id"?, "reason", "message_ids"?: [] }
+     -> 202 { "report_id" }
+   Android uploads ChatPrefsStore queued entries (roomId|peer|reason|ts) and clears them.
+3. Delete conversation (replaces local wipe+archive for 1-to-1):
+   DELETE /v1/directory/conversations/{id} -> removes membership + history for
+   the caller. PROVEN 2026-09-23: DELETE /v1/rooms/{id}/members/me answers
+   404 {"code":"not_found","message":"no such route"}, so group leave has NO
+   working endpoint either; Android now surfaces the 404 in-chat instead of
+   fake success, and keeps local wipe+archive only for 1-to-1. Inbox row
+   returns only on genuinely new messages.
+4. Disappearing TTL (activates the saved per-room choice):
+   PATCH  /v1/rooms/{id} { "disappearing_ttl_sec": 86400|604800|7776000|0 }
+   Server deletes expired messages + emits message.deleted (clients already
+   render tombstones). Android already persists the choice per room.
+5. Mute sync (optional; durations work device-local today):
+   extend GET/PATCH /v1/directory/privacy with per-room mute_until_ms so mute
+   windows roam. Until then ChatPrefsStore mute windows + FCM-side isMuted
+   check enforce them on this device.
+6. Call links (makes menu-generated links joinable):
+   POST   /v1/calls/links { "room_id"?, "expires_at"? } -> { "call_url" }
+   GET    /v1/calls/links/{id} -> { "room_id", "active" }
+   Today Android mints call.ollacore.com/<uuid> links, posts them in-chat and
+   shares them via system share; resolving a link back into a call needs this.
 
 END OF SPEC

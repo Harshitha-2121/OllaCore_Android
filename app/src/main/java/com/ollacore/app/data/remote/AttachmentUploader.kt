@@ -16,7 +16,12 @@ class AttachmentUploader(
         .build()
 ) {
     fun uploadToPresignedUrl(uploadUrl: String, file: File, mimeType: String, onProgress: ((Int) -> Unit)? = null) {
-        val requestBody = file.asRequestBody(mimeType.toMediaType())
+        // The presigned URL is signed with content-type application/octet-stream
+        // (see init "required_headers"); sending the file's real MIME (mimeType)
+        // would fail S3 signature verification with 403. Same as the multipart
+        // path below. mimeType is kept for signature stability + debug logging.
+        android.util.Log.d("Upload", "PUT ${file.name} (${file.length()} bytes, declared $mimeType) as octet-stream")
+        val requestBody = file.asRequestBody("application/octet-stream".toMediaType())
         val request = Request.Builder()
             .url(uploadUrl)
             .put(requestBody)

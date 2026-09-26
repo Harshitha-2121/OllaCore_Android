@@ -3,6 +3,7 @@ package com.ollacore.app.auth
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Before
@@ -32,6 +33,39 @@ class AuthFlowTest {
         )
     }
 
+    // viewModelScope is async: poll uiState until the network round-trip lands
+    // (per docs/testing, OTP calls can also hit 429s - wait out Retry-After once).
+    private suspend fun awaitState(
+        timeoutMs: Long = 75_000,
+        predicate: (AuthViewModel.AuthUiState) -> Boolean
+    ): AuthViewModel.AuthUiState {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var s = viewModel.uiState.value
+        while (!predicate(s)) {
+            if (System.currentTimeMillis() > deadline) break
+            delay(500)
+            s = viewModel.uiState.value
+        }
+        return s
+    }
+
+    private fun isRateLimited(error: String?): Boolean {
+        val e = error?.lowercase() ?: return false
+        return "rate limit" in e || "429" in e || "retry after" in e
+    }
+
+    private suspend fun requestOtpAwait(maxAttempts: Int = 3): AuthViewModel.AuthUiState {
+        repeat(maxAttempts) { attempt ->
+            viewModel.requestOtp()
+            val s = awaitState { it.step == AuthViewModel.AuthStep.OTP_VERIFICATION || it.error != null }
+            if (s.step == AuthViewModel.AuthStep.OTP_VERIFICATION) return s
+            if (!isRateLimited(s.error) || attempt == maxAttempts - 1) return s
+            viewModel.clearError()
+            delay(65_000)
+        }
+        return viewModel.uiState.value
+    }
+
     // ── AND-OTP-001: Valid phone ─────────────────────────────────────
     @Test
     fun testAND_OTP_001_validPhone() = runBlocking {
@@ -40,10 +74,11 @@ class AuthFlowTest {
         val phone = "+15550001111"
 
         viewModel.updatePhone(phone)
-        viewModel.requestOtp()
-
-        val state = viewModel.uiState.value
-        assertEquals("Should move to OTP verification", AuthViewModel.AuthStep.OTP_VERIFICATION, state.step)
+        val state = requestOtpAwait()
+        assertEquals(
+            "Should move to OTP verification (lastError=${state.error})",
+            AuthViewModel.AuthStep.OTP_VERIFICATION, state.step
+        )
     }
 
     // ── AND-OTP-002: Valid OTP ───────────────────────────────────────
@@ -55,11 +90,7 @@ class AuthFlowTest {
 
         // Request OTP
         viewModel.updatePhone(phone)
-        viewModel.requestOtp()
-
-        // In real test, retrieve OTP from simulator
-        // For now, verify the flow structure
-        val state = viewModel.uiState.value
+        val state = requestOtpAwait()
         assertEquals(AuthViewModel.AuthStep.OTP_VERIFICATION, state.step)
 
         // Simulate valid OTP entry
@@ -75,14 +106,14 @@ class AuthFlowTest {
         val phone = "+15550001111"
 
         viewModel.updatePhone(phone)
-        viewModel.requestOtp()
+        requestOtpAwait()
 
         // Try invalid OTP
         viewModel.updateOtpCode("000000")
         viewModel.verifyOtp()
 
         // Error should be set
-        val state = viewModel.uiState.value
+        val state = awaitState { it.error != null }
         assertNotNull("Error should be set", state.error)
     }
 
@@ -136,7 +167,7 @@ class AuthFlowTest {
         val phone = "+15550001111"
 
         viewModel.updatePhone(phone)
-        viewModel.requestOtp()
+        requestOtpAwait()
         assertEquals(AuthViewModel.AuthStep.OTP_VERIFICATION, viewModel.uiState.value.step)
 
         // Resend
@@ -154,7 +185,7 @@ class AuthFlowTest {
 
         // First verification
         viewModel.updatePhone(phone)
-        viewModel.requestOtp()
+        requestOtpAwait()
         viewModel.updateOtpCode("123456")
         viewModel.verifyOtp()
 
@@ -163,9 +194,9 @@ class AuthFlowTest {
         viewModel.verifyOtp()
 
         // Should fail (even if it worked first time)
-        val state = viewModel.uiState.value
+        val state = awaitState { it.error != null }
         // Error should be set or still on OTP screen
-        assertTrue("Old OTP should be rejected", 
+        assertTrue("Old OTP should be rejected",
             state.step == AuthViewModel.AuthStep.OTP_VERIFICATION || state.error != null)
     }
 
@@ -188,7 +219,7 @@ class AuthFlowTest {
         viewModel.verifyOtp()
 
         // Should fail
-        val state = viewModel.uiState.value
+        val state = awaitState { it.error != null }
         assertNotNull("Reused OTP should fail", state.error)
     }
 
@@ -206,7 +237,7 @@ class AuthFlowTest {
         viewModel.verifyOtp()
 
         // Should show network error
-        val state = viewModel.uiState.value
+        val state = awaitState { it.error != null }
         // Error should indicate network issue
         assertNotNull("Should show error for offline", state.error)
     }
@@ -241,13 +272,13 @@ class AuthFlowTest {
         val phone = "+15550001111"
 
         viewModel.updatePhone(phone)
-        viewModel.requestOtp()
+        requestOtpAwait()
 
         // In real test, toggle airplane mode here
         // Retry should work
         val state = viewModel.uiState.value
         // Should either succeed or show recoverable error
-        assertTrue("Should handle network change", 
+        assertTrue("Should handle network change",
             state.step == AuthViewModel.AuthStep.OTP_VERIFICATION || state.error != null)
     }
 

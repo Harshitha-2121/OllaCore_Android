@@ -60,12 +60,18 @@ fun PhoneInputScreen(
     onErrorDismiss: () -> Unit
 ) {
     var countryExpanded by remember { mutableStateOf(false) }
-    var country by rememberSaveable { mutableStateOf(Countries[0]) }
+    // SaveableStateRegistry cannot persist custom Country objects: store the
+    // list index (a saveable Int) and derive the Country from it instead.
+    var countryIndex by rememberSaveable { mutableStateOf(0) }
+    val country = Countries[countryIndex.coerceIn(Countries.indices)]
     var national by rememberSaveable { mutableStateOf("") }
     var showQrInfo by remember { mutableStateOf(false) }
 
     // Keep the ViewModel's full international number in sync with the split fields.
+    // Never propagate a digit-less value: with an empty field the combination is
+    // just the country code ("+91"), which must not overwrite a real number.
     LaunchedEffect(country, national) {
+        if (national.trim().isEmpty()) return@LaunchedEffect
         val full = "${country.code} ${national.trim()}".trim()
         if (full != phone) onPhoneChange(full)
     }
@@ -122,11 +128,11 @@ fun PhoneInputScreen(
                             expanded = countryExpanded,
                             onDismissRequest = { countryExpanded = false }
                         ) {
-                            Countries.forEach { option ->
+                            Countries.forEachIndexed { index, option ->
                                 DropdownMenuItem(
                                     text = { Text("${option.name} (${option.code})") },
                                     onClick = {
-                                        country = option
+                                        countryIndex = index
                                         countryExpanded = false
                                     }
                                 )

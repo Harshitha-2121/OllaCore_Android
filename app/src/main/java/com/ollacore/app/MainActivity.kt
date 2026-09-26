@@ -9,15 +9,26 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.ollacore.app.auth.AuthViewModel
@@ -27,6 +38,8 @@ import com.ollacore.app.ui.call.CallViewModel
 import com.ollacore.app.ui.calls.CallHistoryViewModel
 import com.ollacore.app.ui.chat.ChatScreen
 import com.ollacore.app.ui.chat.ChatViewModel
+import com.ollacore.app.ui.contact.ContactInfoScreen
+import com.ollacore.app.ui.contact.ContactInfoViewModel
 import com.ollacore.app.ui.contacts.ContactsScreen
 import com.ollacore.app.ui.contacts.ContactsViewModel
 import com.ollacore.app.ui.devices.DevicesScreen
@@ -65,8 +78,25 @@ class MainActivity : ComponentActivity() {
             val appContext = LocalContext.current.applicationContext
             val themeStore = remember { com.ollacore.app.data.local.ThemeStore(appContext) }
             val themeMode by themeStore.mode.collectAsState(
-                initial = com.ollacore.app.data.local.ThemeMode.BLUE
+                initial = com.ollacore.app.data.local.ThemeMode.DARK
             )
+            // Settings > Accessibility > Text size: app-wide font scaling.
+            val settingsPrefs = remember(appContext) {
+                com.ollacore.app.data.local.ChatPrefsStore(appContext)
+            }
+            val textScaleStr by settingsPrefs.customFlow(
+                com.ollacore.app.data.local.ChatPrefsStore.SettingsKeys.TEXT_SCALE, "1.0"
+            ).collectAsState(initial = "1.0")
+            val baseDensity = LocalDensity.current
+            val appDensity = remember(baseDensity, textScaleStr) {
+                androidx.compose.ui.unit.Density(
+                    baseDensity.density,
+                    (baseDensity.fontScale * (textScaleStr.toFloatOrNull() ?: 1f)).coerceIn(0.5f, 2.5f)
+                )
+            }
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalDensity provides appDensity
+            ) {
             OllacoreTheme(themeMode = themeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -75,10 +105,12 @@ class MainActivity : ComponentActivity() {
                     OllacoreNavHost()
                 }
             }
+            }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OllacoreNavHost() {
     val navController = rememberNavController()
@@ -89,8 +121,13 @@ fun OllacoreNavHost() {
     var splashDone by remember { mutableStateOf(false) }
     val onboardingDone by authViewModel.onboardingDone.collectAsState()
 
+    val currentEntry by navController.currentBackStackEntryAsState()
     LaunchedEffect(authState.step, splashDone) {
         if (!splashDone) return@LaunchedEffect
+        // Onboarding owns its own exit: step routing must not override it
+        // (onTimeout sets splashDone=true AND navigates, which would otherwise
+        // immediately re-route to the step destination).
+        if (currentEntry?.destination?.route == "onboarding") return@LaunchedEffect
         when (authState.step) {
             AuthStep.OTP_VERIFICATION -> navController.navigate("otp") { popUpTo("phone") { inclusive = false } }
             AuthStep.AUTHENTICATED -> navController.navigate("home") { popUpTo(0) { inclusive = true } }
@@ -141,16 +178,21 @@ fun OllacoreNavHost() {
     Box(modifier = Modifier.fillMaxSize()) {
     NavHost(navController = navController, startDestination = "splash") {
         composable("splash") {
+            // rememberUpdatedState: the timeout lambda must see the LATEST auth
+            // values, not the ones captured at first composition (stale closure
+            // sent fresh installs straight to phone, skipping onboarding).
+            val latestOnboarding by rememberUpdatedState(onboardingDone)
+            val latestStep by rememberUpdatedState(authState.step)
             SplashScreen(
                 onTimeout = {
                     splashDone = true
                     // Fresh installs see onboarding once; everyone else follows the auth step.
-                    if (onboardingDone == false) {
+                    if (latestOnboarding == false) {
                         navController.navigate("onboarding") {
                             popUpTo("splash") { inclusive = true }
                         }
                     } else {
-                        when (authState.step) {
+                        when (latestStep) {
                             AuthStep.OTP_VERIFICATION -> navController.navigate("otp") {
                                 popUpTo("splash") { inclusive = true }
                             }
@@ -207,10 +249,19 @@ fun OllacoreNavHost() {
             val homeState by homeViewModel.uiState.collectAsState()
             val callHistoryViewModel: CallHistoryViewModel = viewModel()
             val callLog by callHistoryViewModel.callLog.collectAsState()
+            // Returning from a chat re-reads the inbox so read/unread counts
+            // (and the distinct-conversation badge) reflect what just happened.
+            LaunchedEffect(Unit) { homeViewModel.refresh() }
+            val homeContext = LocalContext.current
+            val archivedRooms by remember(homeContext) {
+                com.ollacore.app.data.local.ChatPrefsStore(homeContext.applicationContext).archivedRooms
+            }.collectAsState(initial = emptySet())
 
             HomeScreen(
                 uiState = homeState,
                 onConversationClick = { roomId ->
+                    // Opening an archived chat unarchives it (Close chat is reversible).
+                    homeViewModel.markOpened(roomId)
                     navController.navigate("chat/$roomId")
                 },
                 onNewChat = { navController.navigate("contacts") },
@@ -231,7 +282,19 @@ fun OllacoreNavHost() {
                 onDevices = { navController.navigate("devices") },
                 onPrivacy = { navController.navigate("privacy") },
                 onNotifications = { navController.navigate("notifSettings") },
-                onNewGroup = { navController.navigate("newGroup") }
+                onNewGroup = { navController.navigate("newGroup") },
+                onSettings = { navController.navigate("settings") },
+                archivedRooms = archivedRooms
+            )
+        }
+
+        composable("settings") {
+            com.ollacore.app.ui.settings.SettingsRoot(
+                onProfile = { navController.navigate("profile") },
+                onDevices = { navController.navigate("devices") },
+                onPrivacy = { navController.navigate("privacy") },
+                onNotifications = { navController.navigate("notifSettings") },
+                onBack = { navController.popBackStack() }
             )
         }
 
@@ -242,9 +305,33 @@ fun OllacoreNavHost() {
             val roomId = backStackEntry.arguments?.getString("roomId") ?: return@composable
             val chatViewModel: ChatViewModel = viewModel()
             val chatState by chatViewModel.uiState.collectAsState()
+            val menuState by chatViewModel.menuState.collectAsState()
+            val routeScope = rememberCoroutineScope()
+            val routeContext = LocalContext.current
+            var showGroupCall by remember { mutableStateOf(false) }
 
             LaunchedEffect(roomId) {
                 chatViewModel.joinRoom(roomId)
+            }
+
+            // Group-call sheet (menu entry): candidates + create + jump to call.
+            if (showGroupCall) {
+                com.ollacore.app.ui.chat.GroupCallSheet(
+                    peerName = chatState.peerName ?: "Chat",
+                    peerUserId = chatState.peerUserId,
+                    onLoadCandidates = { chatViewModel.loadCallCandidates() },
+                    onStart = { name, ids, done ->
+                        chatViewModel.startGroupCall(name, ids) { newRoom ->
+                            done(newRoom)
+                            if (newRoom != null) {
+                                showGroupCall = false
+                                val label = Uri.encode(name.ifBlank { "Group call" })
+                                navController.navigate("call/$newRoom?audioOnly=false&peerName=$label")
+                            }
+                        }
+                    },
+                    onDismiss = { showGroupCall = false }
+                )
             }
 
             ChatScreen(
@@ -295,9 +382,16 @@ fun OllacoreNavHost() {
                 onDeclineCall = { chatViewModel.declineIncomingCall() },
                 onReconnect = { chatViewModel.joinRoom(roomId) },
                 // Groups -> Group Info; 1-to-1 -> own Profile (peer profile follows same pattern)
+                // Groups -> Group Info; 1-to-1 -> the PEER's contact screen
+                // (never my own Profile - that was the View-info bug).
                 onProfileClick = {
-                    if (chatState.kind.equals("group", ignoreCase = true)) navController.navigate("groupInfo/$roomId")
-                    else navController.navigate("profile")
+                    if (chatState.kind.equals("group", ignoreCase = true)) {
+                        navController.navigate("groupInfo/$roomId")
+                    } else {
+                        val peer = Uri.encode(chatState.peerName ?: "Chat")
+                        val phone = Uri.encode(chatState.peerPhone ?: "")
+                        navController.navigate("contactInfo/$roomId?peerName=$peer&peerPhone=$phone")
+                    }
                 },
                 onPickAttachment = { },
                 onOpenCamera = { },
@@ -326,14 +420,54 @@ fun OllacoreNavHost() {
                 onStartRecord = { chatViewModel.startRecording() },
                 onCancelRecord = { chatViewModel.cancelRecording() },
                 onSendRecord = { chatViewModel.sendRecording() },
+                onClearRecordError = { chatViewModel.clearRecordError() },
                 onSendLocation = {
                     // Demo location (backend/API check required for kind=location).
                     // Replace with FusedLocationProviderClient lastLocation in production.
                     chatViewModel.sendLocation(12.9716, 77.5946, "📍 Shared location")
                 },
                 onResolveUrl = { aid -> chatViewModel.resolveAttachmentUrl(aid) },
+                onForceResolveUrl = { aid -> chatViewModel.resolveAttachmentUrl(aid, force = true) },
                 onClearUploadError = { chatViewModel.clearUploadError() },
-                onRetryMessage = { msg -> chatViewModel.retryForMessage(msg) }
+                onRetryMessage = { msg -> chatViewModel.retryForMessage(msg) },
+                onClearError = { chatViewModel.clearChatError() },
+                onLoginExpired = {
+                    authViewModel.logout()
+                    navController.navigate("phone") { popUpTo(0) }
+                },
+                // ── 3-dot overflow menu wiring ──
+                menuState = menuState,
+                onEnterSelection = { chatViewModel.enterSelectionMode() },
+                onToggleFavourite = { chatViewModel.toggleFavourite() },
+                onMute = { chatViewModel.setMuteDuration(it) },
+                onDisappearing = { chatViewModel.setDisappearingTtl(it) },
+                onCreateList = { name, done -> chatViewModel.createChatList(name, done) },
+                onToggleListMember = { name, member -> chatViewModel.setRoomInList(name, member) },
+                onCloseChat = {
+                    chatViewModel.setArchived(true) {
+                        navController.navigate("home") { popUpTo(0) }
+                    }
+                },
+                onSendCallLink = {
+                    chatViewModel.sendCallLink { link ->
+                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_TEXT, "Join my call: $link")
+                        }
+                        routeContext.startActivity(android.content.Intent.createChooser(send, "Share call link"))
+                    }
+                },
+                onOpenGroupCall = { showGroupCall = true },
+                onReport = { chatViewModel.submitReport(it) },
+                onToggleBlock = { chatViewModel.toggleBlock() },
+                onClearChat = { chatViewModel.clearChat() },
+                onDeleteChat = {
+                    routeScope.launch {
+                        if (chatViewModel.deleteChat()) {
+                            navController.navigate("home") { popUpTo(0) }
+                        }
+                    }
+                }
             )
         }
 
@@ -529,6 +663,54 @@ fun OllacoreNavHost() {
             ImageViewerScreen(
                 imageUrl = backStackEntry.arguments?.getString("url") ?: "",
                 onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            "contactInfo/{roomId}?peerName={peerName}&peerPhone={peerPhone}",
+            arguments = listOf(
+                navArgument("roomId") { type = NavType.StringType },
+                navArgument("peerName") { type = NavType.StringType; defaultValue = "Chat" },
+                navArgument("peerPhone") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { backStackEntry ->
+            val roomId = backStackEntry.arguments?.getString("roomId") ?: return@composable
+            val infoViewModel: ContactInfoViewModel = viewModel()
+            val infoState by infoViewModel.uiState.collectAsState()
+            val muted by infoViewModel.mutedFlow(roomId).collectAsState()
+
+            LaunchedEffect(roomId) {
+                infoViewModel.load(roomId)
+            }
+
+            val displayPeer = infoState.alias?.ifBlank { null }
+                ?: infoState.peerName.ifBlank {
+                    backStackEntry.arguments?.getString("peerName") ?: "Chat"
+                }
+            ContactInfoScreen(
+                uiState = infoState,
+                muted = muted,
+                onBack = { navController.popBackStack() },
+                onVoiceCall = {
+                    navController.navigate("call/$roomId?audioOnly=true&peerName=${Uri.encode(displayPeer)}")
+                },
+                onVideoCall = {
+                    navController.navigate("call/$roomId?audioOnly=false&peerName=${Uri.encode(displayPeer)}")
+                },
+                onSearchChat = { token ->
+                    navController.navigate("search/$roomId/$token")
+                },
+                onToggleMute = { checked -> infoViewModel.setMuted(roomId, checked) },
+                onRename = { name -> infoViewModel.setAlias(roomId, name) },
+                onBackToChat = { navController.popBackStack() },
+                onOpenImage = { url ->
+                    navController.navigate("imageViewer?url=${Uri.encode(url)}")
+                },
+                onOpenDocument = { url, name, mime ->
+                    navController.navigate(
+                        "doc?url=${Uri.encode(url)}&name=${Uri.encode(name)}&mime=${Uri.encode(mime)}"
+                    )
+                }
             )
         }
 

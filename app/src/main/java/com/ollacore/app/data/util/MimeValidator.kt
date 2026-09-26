@@ -73,6 +73,10 @@ object MimeValidator {
         "avi" to "video/x-msvideo",
         "mkv" to "video/x-matroska",
         "mp3" to "audio/mpeg",
+        // M4A is an MP4 container: our recorder writes AAC-in-M4A declared as
+        // audio/mp4 (Android's MimeTypeMap says audio/mpeg, which is wrong and
+        // used to reject every voice recording at upload time).
+        "m4a" to "audio/mp4",
         "ogg" to "audio/ogg",
         "wav" to "audio/wav",
         "flac" to "audio/flac",
@@ -145,7 +149,9 @@ object MimeValidator {
 
         // 5. Content-based detection for common types
         val detectedMime = detectMimeType(header, ext)
-        if (detectedMime != null && detectedMime != declaredMime) {
+        if (detectedMime != null && detectedMime != declaredMime &&
+            !isSafeContentMismatch(detectedMime, declaredMime, ext)
+        ) {
             return MimeValidationResult(
                 false,
                 "Content doesn't match declared type: detected=$detectedMime, declared=$declaredMime"
@@ -168,13 +174,15 @@ object MimeValidator {
             }
         }
 
-        // MP4 detection (ftyp box)
+        // MP4 detection (ftyp box). The brand does NOT reliably separate audio-only
+        // MP4/M4A from video MP4: MediaRecorder writes "mp42" even for AAC-only
+        // recordings, so callers must accept the audio/mp4 pairing (see step 5).
         if (header.size >= 12) {
             val ftyp = String(header, 4, 4)
             if (ftyp == "ftyp") {
                 val brand = String(header, 8, 4)
                 return when (brand) {
-                    "isom", "mp41", "mp42", "avc1", "hev1", "mmp4" -> "video/mp4"
+                    "M4A " -> "audio/mp4"
                     "qt  " -> "video/quicktime"
                     else -> "video/mp4"
                 }
@@ -202,12 +210,48 @@ object MimeValidator {
         return magicBytes.keys + extensionMimeMap.values.toSet() - blockedTypes
     }
 
+    /**
+     * The server's audio probe only accepts the M4A major brand, but
+     * MediaRecorder always stamps mp42/isom even for audio-only AAC. Rewrites
+     * the 4-byte major brand to "M4A " when the file is a genuine ftyp box.
+     * This is correct metadata (the content IS audio-only MP4), not spoofing:
+     * size, box structure and media are untouched. Returns false if the file
+     * is not an ftyp file (caller then uploads as-is and surfaces any error).
+     */
+    fun ensureM4aBrand(file: File): Boolean {
+        return try {
+            if (!file.exists() || file.length() < 12) return false
+            java.io.RandomAccessFile(file, "rw").use { raf ->
+                val head = ByteArray(12)
+                if (raf.read(head) != 12) return false
+                if (String(head, 4, 4, Charsets.US_ASCII) != "ftyp") return false
+                raf.seek(8)
+                raf.write("M4A ".toByteArray(Charsets.US_ASCII))
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun isSafeMimeMismatch(mime1: String, mime2: String): Boolean {
         val safeMismatches = setOf(
             setOf("image/jpeg", "image/jpg"),
             setOf("video/quicktime", "video/mp4")
         )
         return safeMismatches.any { it.containsAll(setOf(mime1, mime2)) }
+    }
+
+    /**
+     * ftyp content detected as video/mp4 while declared audio/mp4 is safe ONLY
+     * for MP4-family audio extensions: the brand cannot separate audio-only
+     * M4A (MediaRecorder writes mp42) from video. Anything else still fails.
+     */
+    private fun isSafeContentMismatch(detected: String, declared: String, ext: String): Boolean {
+        if (detected == "video/mp4" && declared == "audio/mp4") {
+            return ext.lowercase().trim() in setOf("m4a", "mp4", "m4b", "m4p")
+        }
+        return false
     }
 
     private fun hasSuspiciousExtension(filename: String): Boolean {

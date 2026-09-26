@@ -16,10 +16,22 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -31,6 +43,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -48,6 +62,7 @@ import com.ollacore.app.ui.theme.BubbleRadiusOwn
 import com.ollacore.app.ui.theme.BubbleRadiusPeer
 import com.ollacore.app.ui.theme.OllaPrimaryBlue
 import com.ollacore.app.ui.attachments.AttachmentPickerSheet
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
@@ -90,6 +105,7 @@ fun ChatScreen(
     onSendMedia: (File, String, String, String) -> Unit = { _, _, _, _ -> },
     onSendLocation: () -> Unit = {},
     onResolveUrl: (String) -> Unit = {},
+    onForceResolveUrl: (String) -> Unit = {},
     onClearUploadError: () -> Unit = {},
     // ── Message status ticks (Category 1 - ack/receipts already in Ollacore WS) ──
     onRetryMessage: (MessageResponse) -> Unit = {},
@@ -97,6 +113,7 @@ fun ChatScreen(
     onStartRecord: () -> Unit = {},
     onCancelRecord: () -> Unit = {},
     onSendRecord: () -> Unit = {},
+    onClearRecordError: () -> Unit = {},
     // ── In-app document viewer (spec 27) ──
     onOpenDocument: (String, String, String) -> Unit = { _, _, _ -> },
     // ── Fullscreen media viewer (spec 42 route) ──
@@ -109,9 +126,40 @@ fun ChatScreen(
     onAcceptCall: (String) -> Unit = {},
     onDeclineCall: () -> Unit = {},
     // ── Spec 34: full error retry rejoins the room ──
-    onReconnect: () -> Unit = {}
+    onReconnect: () -> Unit = {},
+    onClearError: () -> Unit = {},
+    // ── Expired session: log out + return to login (retry can't help) ──
+    onLoginExpired: () -> Unit = {},
+    // ── 3-dot overflow menu (stateful actions; see ChatOverflowMenu) ──
+    menuState: ChatViewModel.ChatMenuState = ChatViewModel.ChatMenuState(),
+    onEnterSelection: () -> Unit = {},
+    onToggleFavourite: () -> Unit = {},
+    onMute: (Long?) -> Unit = {},
+    onDisappearing: (Long) -> Unit = {},
+    onCreateList: (String, (Boolean) -> Unit) -> Unit = { _, done -> done(false) },
+    onToggleListMember: (String, Boolean) -> Unit = { _, _ -> },
+    onCloseChat: () -> Unit = {},
+    onSendCallLink: () -> Unit = {},
+    onOpenGroupCall: () -> Unit = {},
+    onReport: (String) -> Unit = {},
+    onToggleBlock: () -> Unit = {},
+    onClearChat: () -> Unit = {},
+    onDeleteChat: () -> Unit = {}
 ) {
-    var messageText by remember { mutableStateOf("") }
+    // Draft survives rotation (String is saveable; rotation test covers this).
+    var messageText by rememberSaveable { mutableStateOf("") }
+    // Settings-driven input behavior (Settings > Chats > Enter key to send;
+    // Settings > Storage > Media upload quality). Defaults keep current UX.
+    val chatPrefsContext = LocalContext.current
+    val chatPrefs = remember(chatPrefsContext) {
+        com.ollacore.app.data.local.ChatPrefsStore(chatPrefsContext.applicationContext)
+    }
+    val enterToSend by chatPrefs.customBoolFlow(
+        com.ollacore.app.data.local.ChatPrefsStore.SettingsKeys.ENTER_SEND, true
+    ).collectAsState(initial = true)
+    val uploadQuality by chatPrefs.customFlow(
+        com.ollacore.app.data.local.ChatPrefsStore.SettingsKeys.UPLOAD_QUALITY, "balanced"
+    ).collectAsState(initial = "balanced")
     var showActions by remember { mutableStateOf<MessageResponse?>(null) }
     var showEmojiPicker by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
@@ -123,6 +171,38 @@ fun ChatScreen(
     var previewCaption by remember { mutableStateOf("") }
     var recentMedia by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    // Older history: scrolling to the very top pages backward (server has_more).
+    // lastPagedSeq stops repeat calls when a page comes back empty.
+    var lastPagedSeq by remember(roomId) { mutableStateOf<Int?>(null) }
+    val canPage = uiState.hasMoreHistory && !uiState.loadingHistory && !uiState.isLoading
+    LaunchedEffect(listState.firstVisibleItemIndex, canPage) {
+        if (canPage && listState.firstVisibleItemIndex == 0) {
+            val minSeq = uiState.messages.minOfOrNull { it.eventSeq }
+            if (minSeq != null && minSeq != lastPagedSeq) {
+                lastPagedSeq = minSeq
+                onLoadMore(minSeq)
+            }
+        }
+    }
+    // WhatsApp-style follow: chat opens at the latest message and sticks to
+    // the bottom for new arrivals. History prepend (loadMore) never moves the
+    // viewport: the last message id is unchanged by prepends, so no scroll.
+    var lastSeenMsgId by remember(roomId) { mutableStateOf<String?>(null) }
+    val lastMsgId = uiState.messages.lastOrNull()?.id
+    LaunchedEffect(lastMsgId) {
+        val msgs = uiState.messages
+        if (msgs.isEmpty() || lastMsgId == lastSeenMsgId) return@LaunchedEffect
+        val isInitial = lastSeenMsgId == null
+        lastSeenMsgId = lastMsgId
+        val visible = listState.layoutInfo.visibleItemsInfo
+        val atBottom = visible.lastOrNull()?.index?.let { it >= msgs.size - 3 } ?: true
+        val isOwn = msgs.lastOrNull()?.senderId == uiState.currentUserId
+        if (isInitial || atBottom || isOwn) {
+            if (isInitial) listState.scrollToItem(msgs.size - 1)
+            else listState.animateScrollToItem(msgs.size - 1)
+        }
+    }
     val context = LocalContext.current
 
     fun stagePreview(file: File?, mime: String, kind: String) {
@@ -135,6 +215,29 @@ fun ChatScreen(
 
     val mediaPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) recentMedia = loadRecentImages(context)
+    }
+    // ── Microphone permission (RECORD_AUDIO is declared in the manifest but
+    //   must be requested at runtime; without it setAudioSource fails) ──
+    var micDialog by remember { mutableStateOf(false) }
+    val micPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) onStartRecord() else micDialog = true
+    }
+    fun onMicTap() {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            onStartRecord()
+            return
+        }
+        val activity = context as? android.app.Activity
+        val showRationale = activity?.let {
+            androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                it, android.Manifest.permission.RECORD_AUDIO
+            )
+        } ?: true
+        if (showRationale) micDialog = true
+        else runCatching { micPermLauncher.launch(android.Manifest.permission.RECORD_AUDIO) }
     }
     fun ensureRecents() {
         val perm = if (android.os.Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_IMAGES
@@ -183,7 +286,7 @@ fun ChatScreen(
     }
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap: Bitmap? ->
         if (bitmap != null) {
-            val file = bitmapToCacheFile(context, bitmap) ?: return@rememberLauncherForActivityResult
+            val file = bitmapToCacheFile(context, bitmap, uploadQualityValue(uploadQuality)) ?: return@rememberLauncherForActivityResult
             showAttachmentSheet = false
             stagePreview(file, "image/jpeg", MessageKinds.IMAGE)
         }
@@ -192,8 +295,23 @@ fun ChatScreen(
     val peerName = uiState.peerName ?: "Chat"
     val isOnline = uiState.onlineUsers.isNotEmpty()
     val isGroupChat = uiState.kind.equals("group", ignoreCase = true)
+    // Typing names resolve via the participants roster (never raw ids/phone numbers);
+    // 1-to-1 keeps WhatsApp-style "typing…", groups show who is typing.
+    val typingNames = remember(uiState.typingUsers, uiState.participantNames, uiState.currentUserId) {
+        uiState.typingUsers
+            .filter { it != uiState.currentUserId }
+            .map { id ->
+                uiState.participantNames[id]?.takeIf { it.isNotBlank() }
+                    ?: uiState.participantPhones[id]?.takeIf { it.isNotBlank() }
+                    ?: peerName
+            }
+            .distinct()
+    }
     val subtitle = when {
-        uiState.typingUsers.isNotEmpty() -> "typing…"
+        typingNames.isNotEmpty() && !isGroupChat -> "typing…"
+        typingNames.isNotEmpty() && typingNames.size == 1 -> "${typingNames[0]} is typing…"
+        typingNames.isNotEmpty() && typingNames.size == 2 -> "${typingNames[0]} and ${typingNames[1]} are typing…"
+        typingNames.isNotEmpty() -> "${typingNames[0]} and ${typingNames.size - 1} others are typing…"
         isGroupChat && uiState.participantCount > 0 -> "${uiState.participantCount} members"
         isOnline -> "online"
         uiState.isConnected -> "tap for info"
@@ -280,18 +398,32 @@ fun ChatScreen(
                         var showMore by remember { mutableStateOf(false) }
                         Box {
                             IconButton(onClick = { showMore = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "More")
+                                Icon(Icons.Default.MoreVert, contentDescription = "Chat menu")
                             }
-                            DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("View info") },
-                                    onClick = { showMore = false; onProfileClick() }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Search in chat") },
-                                    onClick = { showMore = false; onSearch() }
-                                )
-                            }
+                            // 3-dot overflow menu: dark anchored popup, stateful rows.
+                            // Contact info + Search reuse the existing routes/actions.
+                            ChatOverflowMenu(
+                                expanded = showMore,
+                                onDismiss = { showMore = false },
+                                menu = menuState,
+                                peerName = peerName,
+                                isGroup = isGroupChat,
+                                onContactInfo = onProfileClick,
+                                onSearch = onSearch,
+                                onSelectMessages = onEnterSelection,
+                                onMute = onMute,
+                                onDisappearing = onDisappearing,
+                                onToggleFavourite = onToggleFavourite,
+                                onCreateList = onCreateList,
+                                onToggleListMember = onToggleListMember,
+                                onCloseChat = onCloseChat,
+                                onSendCallLink = onSendCallLink,
+                                onNewGroupCall = onOpenGroupCall,
+                                onReport = onReport,
+                                onToggleBlock = onToggleBlock,
+                                onClearChat = onClearChat,
+                                onDeleteChat = onDeleteChat
+                            )
                         }
                         if (!uiState.isConnected) {
                             Icon(Icons.Default.CloudOff, contentDescription = "Disconnected", tint = MaterialTheme.colorScheme.error, modifier = Modifier.padding(end = 4.dp))
@@ -308,16 +440,50 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                // Edge-to-edge (MainActivity enableEdgeToEdge) + adjustResize:
+                // consume IME insets so the composer rides above the keyboard
+                // instead of being covered by it.
+                .imePadding()
         ) {
             // Spec 35: subtle offline indicator (chat stays usable).
             val (chatOnline, chatWasOffline) = com.ollacore.app.ui.common.rememberConnectivity()
             com.ollacore.app.ui.common.OfflineBanner(isOnline = chatOnline, wasOffline = chatWasOffline)
+            // Inline action errors (e.g. group leave rejected): dismissible, chat stays usable.
+            if (uiState.error != null && uiState.messages.isNotEmpty()) {
+                Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.errorContainer) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            uiState.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onClearError) { Text("Dismiss") }
+                    }
+                }
+            }
+            // Loading: spinner instead of a blank screen while history loads.
+            if (uiState.isLoading && uiState.messages.isEmpty() && uiState.error == null) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    CircularProgressIndicator()
+                }
+            }
             // Spec 34: friendly full error with rejoin retry (raw errors mapped, never shown).
+            // Auth-expired errors offer log-in (retry can't revive a dead session).
             if (uiState.error != null && uiState.messages.isEmpty() && !uiState.isLoading) {
                 com.ollacore.app.ui.common.ErrorState(
                     message = uiState.error,
                     onRetry = onReconnect,
-                    onBack = onBack
+                    onBack = onBack,
+                    onLoginExpired = onLoginExpired
                 )
             }
             // Messages list over a very subtle dot pattern (spec 10 background).
@@ -331,13 +497,39 @@ fun ChatScreen(
                     state = listState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 8.dp),
+                        .padding(horizontal = 8.dp)
+                        .testTag("chat_list"),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                items(uiState.messages, key = { it.id }) { message ->
+                // Centered encryption notice (WhatsApp-style system bubble, real info).
+                item(key = "sys-e2ee") {
+                    SystemNoticeChip(
+                        text = if (uiState.isEncrypted) "🔒 Messages are end-to-end encrypted."
+                        else "Messages appear here.",
+                        icon = Icons.Default.Lock
+                    )
+                }
+                itemsIndexed(uiState.messages, key = { _, m -> m.id }) { index, message ->
+                    // Day separator chip between different calendar days.
+                    val day = messageDay(message.createdAt)
+                    val prevDay = uiState.messages.getOrNull(index - 1)?.let { messageDay(it.createdAt) }
+                    if (day != null && day != prevDay) {
+                        SystemNoticeChip(text = dayLabel(day), icon = null)
+                    }
                     val isStarred = message.id in uiState.starredIds
                     val isSelected = message.id in uiState.selectedIds
+                    val isDeleted = message.id in uiState.deletedIds
+                    // Quoted-reply lookup: resolve reply_to against loaded history so the
+                    // bubble shows WHO + WHAT was quoted (not just a "Reply" label).
+                    val messagesById = remember(uiState.messages) { uiState.messages.associateBy { it.id } }
+                    val quotedMsg = message.replyTo?.let { messagesById[it] }
+                    val quotedSender = quotedMsg?.let {
+                        if (it.senderId == uiState.currentUserId) "You"
+                        else uiState.participantNames[it.senderId]
+                            ?: uiState.participantPhones[it.senderId]?.takeIf { p -> p.isNotBlank() }
+                            ?: peerName
+                    }
                     val isOwn = message.senderId == uiState.currentUserId ||
                         (uiState.currentUserId.isBlank() && (message.senderId == "self" || message.senderId.isBlank()))
                     val status = uiState.messageStatus[message.id]
@@ -352,18 +544,28 @@ fun ChatScreen(
                         isOwn = isOwn,
                         senderLabel = senderLabel,
                         showSender = senderLabel != null,
+                        isDeleted = isDeleted,
                         onOpenDocument = onOpenDocument,
                         onOpenImage = onOpenImage,
                         isStarred = isStarred,
                         isSelected = isSelected,
                         attachmentUrls = attachmentUrls,
                         onResolveUrl = onResolveUrl,
+                        onForceResolveUrl = onForceResolveUrl,
                         status = status,
+                        quoted = quotedMsg,
+                        quotedSender = quotedSender,
+                        onQuoteClick = { targetId ->
+                            val idx = uiState.messages.indexOfFirst { it.id == targetId }
+                            if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                        },
                         onRetry = { onRetryMessage(message) },
                         onClick = {
+                            if (isDeleted) return@MessageBubble
                             if (uiState.selectionMode) onToggleSelect(message.id) else showActions = message
                         },
                         onLongClick = {
+                            if (isDeleted) return@MessageBubble
                             if (uiState.selectionMode) onToggleSelect(message.id) else showActions = message
                         }
                     )
@@ -403,8 +605,8 @@ fun ChatScreen(
                 }
             }
 
-            // Typing indicator (WhatsApp-style)
-            if (uiState.typingUsers.isNotEmpty()) {
+            // Typing indicator (WhatsApp-style; typingNames already excludes self)
+            if (typingNames.isNotEmpty()) {
                 Text(
                     "  typing…",
                     style = MaterialTheme.typography.bodySmall,
@@ -416,6 +618,12 @@ fun ChatScreen(
             // Reply preview
             uiState.replyTo?.let { reply ->
                 val preview = bodyString(reply.body, "text") ?: ""
+                // Name the reply target so it's obvious WHICH message is quoted
+                // before sending (peer name / roster / You).
+                val targetName = if (reply.senderId == uiState.currentUserId) "yourself"
+                else uiState.participantNames[reply.senderId]
+                    ?: uiState.participantPhones[reply.senderId]?.takeIf { it.isNotBlank() }
+                    ?: peerName
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.surfaceVariant,
@@ -428,7 +636,7 @@ fun ChatScreen(
                         Icon(Icons.Default.Reply, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Replying to", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Text("Replying to $targetName", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                             Text(preview, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
                         }
                         IconButton(onClick = { onReply(null) }) {
@@ -490,7 +698,39 @@ fun ChatScreen(
                 }
             }
 
+            // Recorder failures: dismissible banner, never fullscreen.
+            uiState.recordError?.let { recordErr ->
+                Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.errorContainer) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.MicOff, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            recordErr,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onClearRecordError) { Text("Dismiss") }
+                    }
+                }
+            }
+
             // Composer — WhatsApp-style: Emoji | Attachment | Camera | Text | Voice/Send
+            // Desktop-style input: Enter sends, Shift+Enter inserts a newline.
+            val sendNow = {
+                if (messageText.isNotBlank()) {
+                    onSendMessage(messageText.trim())
+                    messageText = ""
+                    onTypingStopped()
+                }
+            }
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 tonalElevation = 3.dp
@@ -515,10 +755,28 @@ fun ChatScreen(
                             messageText = it
                             if (it.isNotEmpty()) onTypingStarted() else onTypingStopped()
                         },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
+                            // Hardware keyboards (incl. emulator): plain Enter sends,
+                            // Shift+Enter falls through to the default newline.
+                            // Honors Settings > Chats > Enter key to send.
+                            if (enterToSend && event.key == Key.Enter && event.type == KeyEventType.KeyDown && !event.isShiftPressed) {
+                                sendNow()
+                                true
+                            } else false
+                        },
                         placeholder = { Text("Type a message…") },
                         maxLines = 4,
-                        shape = RoundedCornerShape(28.dp)
+                        shape = RoundedCornerShape(28.dp),
+                        // autoCorrectEnabled = false removes Gboard's empty white
+                        // suggestion strip above the keyboard (it can't be hidden
+                        // per-app any other way; tradeoff: no autocorrect here).
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Text,
+                            autoCorrectEnabled = false,
+                            imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default
+                        ),
+                        keyboardActions = if (enterToSend) KeyboardActions(onSend = { sendNow() })
+                        else KeyboardActions()
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     if (messageText.isNotBlank()) {
@@ -528,11 +786,7 @@ fun ChatScreen(
                                 .size(48.dp)
                                 .clip(CircleShape)
                                 .background(MaterialTheme.colorScheme.primary)
-                                .clickable {
-                                    onSendMessage(messageText.trim())
-                                    messageText = ""
-                                    onTypingStopped()
-                                }
+                                .clickable { sendNow() }
                         ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,
@@ -541,10 +795,11 @@ fun ChatScreen(
                                 modifier = Modifier.size(22.dp)
                             )
                         }
-                    } else {
+                    } else if (!uiState.voiceDraft.isRecording) {
                         // Spec 13: tap mic to record (no voice_note backend, so it sends
                         // as kind=audio with duration + waveform body fields).
-                        FilledTonalIconButton(onClick = onStartRecord) {
+                        // Hidden while recording (VM also guards double-start).
+                        FilledTonalIconButton(onClick = ::onMicTap) {
                             Icon(Icons.Default.Mic, contentDescription = "Record voice message")
                         }
                     }
@@ -631,6 +886,35 @@ fun ChatScreen(
         )
     }
 
+    // Microphone permission explainer (first tap, or after a denial).
+    if (micDialog) {
+        AlertDialog(
+            onDismissRequest = { micDialog = false },
+            icon = { Icon(Icons.Default.Mic, contentDescription = null) },
+            title = { Text("Allow microphone access?") },
+            text = { Text("Voice messages need the microphone. You can change this anytime in the app settings.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    micDialog = false
+                    runCatching { micPermLauncher.launch(android.Manifest.permission.RECORD_AUDIO) }
+                }) { Text("Allow") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    micDialog = false
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.fromParts("package", context.packageName, null)
+                            )
+                        )
+                    }
+                }) { Text("App settings") }
+            }
+        )
+    }
+
     // Incoming call dialog (ringing while browsing the chat).
     uiState.incomingCall?.let { call ->
         AlertDialog(
@@ -693,6 +977,25 @@ private fun bodyString(body: Map<String, kotlinx.serialization.json.JsonElement>
         body[key]?.jsonPrimitive?.content
     } catch (_: Exception) {
         null
+    }
+}
+
+/** One-line preview of a quoted message: text snippet or a media-kind label. */
+private fun quoteSnippet(msg: MessageResponse): String {
+    bodyString(msg.body, "text")?.takeIf { it.isNotBlank() }?.let {
+        return if (it.length > 90) it.take(90) + "…" else it
+    }
+    if (msg.attachmentIds.isNotEmpty() || msg.kind.equals("image", ignoreCase = true)) return "📷 Photo"
+    return when (msg.kind.lowercase()) {
+        "video" -> "🎥 Video"
+        "audio", "voice_note" -> "🎵 Voice message"
+        "video_note" -> "🎥 Video message"
+        "file" -> "📄 ${bodyString(msg.body, "filename") ?: "Document"}"
+        "location" -> "📍 Location"
+        "contact" -> "👤 Contact"
+        "poll" -> "📊 Poll"
+        "event" -> "📅 Event"
+        else -> msg.kind
     }
 }
 
@@ -839,12 +1142,17 @@ fun MessageBubble(
     isSelected: Boolean = false,
     attachmentUrls: Map<String, String> = emptyMap(),
     onResolveUrl: (String) -> Unit = {},
+    onForceResolveUrl: (String) -> Unit = {},
     status: MessageStatus? = null,
     onRetry: () -> Unit = {},
     senderLabel: String? = null,
     showSender: Boolean = false,
     onOpenDocument: (String, String, String) -> Unit = { _, _, _ -> },
     onOpenImage: (String) -> Unit = {},
+    isDeleted: Boolean = false,
+    quoted: MessageResponse? = null,
+    quotedSender: String? = null,
+    onQuoteClick: ((String) -> Unit)? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -880,10 +1188,55 @@ fun MessageBubble(
             ) {
                 Column(modifier = Modifier.padding(10.dp)) {
                     if (message.replyTo != null) {
-                        Text("↩ Reply", style = MaterialTheme.typography.labelSmall, color = soft.copy(alpha = 0.9f))
+                        // WhatsApp-style quoted card: colored bar + quoted sender + snippet.
+                        // Falls back to the raw id tail when the original isn't loaded.
+                        val snippet = quoted?.let { quoteSnippet(it) }
+                            ?: "Original message"
+                        val qName = quotedSender ?: "Reply"
+                        Row(
+                            modifier = Modifier
+                                .padding(bottom = 6.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (isOwn) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.18f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                )
+                                .then(
+                                    if (onQuoteClick != null && quoted != null) Modifier.clickable { onQuoteClick(message.replyTo) }
+                                    else Modifier
+                                )
+                                .padding(start = 8.dp, top = 6.dp, end = 8.dp, bottom = 6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(3.dp)
+                                    .heightIn(min = 32.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "↩ $qName",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                    color = if (isOwn) androidx.compose.ui.graphics.Color.White
+                                    else MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    snippet,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = soft.copy(alpha = 0.95f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                     // ── Media rendering (was text-only gap): image / video / doc / audio / location ──
-                    MediaMessageContent(message = message, attachmentUrls = attachmentUrls, onResolveUrl = onResolveUrl, isOwn = isOwn, onGradient = isOwn, onOpenDocument = onOpenDocument, onOpenImage = onOpenImage)
+                    MediaMessageContent(message = message, attachmentUrls = attachmentUrls, onResolveUrl = onResolveUrl, onForceResolveUrl = onForceResolveUrl, isOwn = isOwn, onGradient = isOwn, onOpenDocument = onOpenDocument, onOpenImage = onOpenImage)
                     BubbleFooter(message = message, isStarred = isStarred, isSelected = isSelected, status = status, isOwn = isOwn, onRetry = onRetry, onGradient = isOwn)
                 }
             }
@@ -891,6 +1244,34 @@ fun MessageBubble(
     }
 
     Box(modifier = Modifier.fillMaxWidth().background(if (isSelected) MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f) else androidx.compose.ui.graphics.Color.Transparent), contentAlignment = alignment) {
+        if (isDeleted) {
+            // WhatsApp-style tombstone: placeholder, no actions, no preview.
+            Surface(
+                shape = shape,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.widthIn(max = 300.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Block,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "🚫 This message was deleted",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            return@Box
+        }
         if (showSender && !isOwn && senderLabel != null) {
             Column(modifier = Modifier.widthIn(max = 330.dp)) {
                 Text(
@@ -991,6 +1372,7 @@ private fun MediaMessageContent(
     message: MessageResponse,
     attachmentUrls: Map<String, String>,
     onResolveUrl: (String) -> Unit,
+    onForceResolveUrl: (String) -> Unit = {},
     isOwn: Boolean,
     onGradient: Boolean = false,
     onOpenDocument: (String, String, String) -> Unit = { _, _, _ -> },
@@ -1004,6 +1386,7 @@ private fun MediaMessageContent(
     val lat = bodyString(body, "lat")?.toDoubleOrNull()
     val lng = bodyString(body, "lng")?.toDoubleOrNull()
     val attachmentId = message.attachmentIds.firstOrNull()
+        ?: com.ollacore.app.data.model.attachmentRefIds(message).firstOrNull()
     val kind = message.kind.lowercase()
 
     // Location bubble (backend/API check required for kind=location)
@@ -1015,7 +1398,11 @@ private fun MediaMessageContent(
     val isMedia = attachmentId != null || kind in setOf(MessageKinds.IMAGE, MessageKinds.VIDEO, MessageKinds.AUDIO, MessageKinds.FILE)
     if (!isMedia) {
         if (caption.isNotEmpty()) {
-            Text(caption, modifier = Modifier.padding(4.dp))
+            LinkifiedText(caption, modifier = Modifier.padding(4.dp))
+            // Client-side link preview card (no unfurl backend): domain + open.
+            com.ollacore.app.data.util.firstUrl(caption)?.let { url ->
+                LinkPreviewCard(url = url)
+            }
         } else if (kind != MessageKinds.TEXT) {
             // voice_note / contact / future kinds have no backend yet: honest label, never blank.
             Text(
@@ -1060,11 +1447,23 @@ private fun MediaMessageContent(
             VideoBubbleContent(url = url, caption = caption)
         }
         kind == MessageKinds.AUDIO || effectiveMime.startsWith("audio/") -> {
-            val durationMs = body["duration_ms"]?.jsonPrimitive?.content?.toLongOrNull()
+            // duration_ms (ours) or duration seconds (peer clients) - voiceDurationMs handles both.
+            val durationMs = com.ollacore.app.data.model.voiceDurationMs(body)
             val wave = body["waveform"]?.jsonArray?.mapNotNull {
                 try { it.jsonPrimitive.content.toInt() } catch (_: Exception) { null }
             }?.take(48)
-            AudioBubbleContent(url = url, filename = filename, onGradient = onGradient, durationMs = durationMs, waveform = wave)
+            val byteSize = bodyString(body, "byte_size")?.toLongOrNull()
+            AudioBubbleContent(
+                url = url,
+                filename = filename,
+                onGradient = onGradient,
+                durationMs = durationMs,
+                waveform = wave,
+                attachmentId = attachmentId,
+                byteSize = byteSize,
+                onResolveUrl = { aid -> onResolveUrl(aid) },
+                onForceResolveUrl = { aid -> onForceResolveUrl(aid) }
+            )
         }
         else -> {
             val docName = filename ?: caption.ifBlank { attachmentId ?: "document" }
@@ -1258,42 +1657,119 @@ private fun AudioBubbleContent(
     filename: String?,
     onGradient: Boolean = false,
     durationMs: Long? = null,
-    waveform: List<Int>? = null
+    waveform: List<Int>? = null,
+    attachmentId: String? = null,
+    byteSize: Long? = null,
+    onResolveUrl: (String) -> Unit = {},
+    onForceResolveUrl: (String) -> Unit = {}
 ) {
     val soft = if (onGradient) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f)
     else MaterialTheme.colorScheme.onSurfaceVariant
     var isPlaying by remember { mutableStateOf(false) }
     var isPreparing by remember { mutableStateOf(false) }
+    var playError by remember { mutableStateOf<String?>(null) }
     var knownDurationMs by remember(durationMs) { mutableStateOf(durationMs) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    DisposableEffect(url) {
-        onDispose { try { player?.release() } catch (_: Exception) { }; player = null }
+    // 418-byte MP3 stubs (early probes) decode as near-silence; surface honestly.
+    val isStubAudio = byteSize != null && byteSize in 1..1024L
+    // Peer history can omit attachments entirely (Alice webm): no download id.
+    val missingAttachment = attachmentId == null && url == null && !isStubAudio
+    // Armed when a tap had no URL yet, or a play error forced a re-resolve.
+    var autoStartArmed by remember { mutableStateOf(false) }
+
+    fun releasePlayer() {
+        try { player?.reset() } catch (_: Exception) { }
+        try { player?.release() } catch (_: Exception) { }
+        player = null
+        isPlaying = false
+        isPreparing = false
     }
+
+    fun startPlayback(source: String) {
+        isPreparing = true
+        playError = null
+        try {
+            player?.let {
+                try { it.reset() } catch (_: Exception) { }
+                try { it.release() } catch (_: Exception) { }
+            }
+            player = MediaPlayer().apply {
+                setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .build()
+                )
+                setDataSource(source)
+                setOnPreparedListener {
+                    if (knownDurationMs == null) knownDurationMs = it.duration.toLong()
+                    it.start(); isPlaying = true; isPreparing = false
+                }
+                setOnCompletionListener { isPlaying = false }
+                setOnErrorListener { _, _, _ ->
+                    // Expired presigned URL or unsupported bytes: never stick on spinner.
+                    releasePlayer()
+                    playError = "Can't play this audio"
+                    autoStartArmed = true
+                    val aid = attachmentId
+                    if (aid != null) onForceResolveUrl(aid)
+                    true
+                }
+                prepareAsync()
+            }
+        } catch (_: Exception) {
+            releasePlayer()
+            playError = "Can't play this audio"
+            autoStartArmed = true
+            val aid = attachmentId
+            if (aid != null) onForceResolveUrl(aid)
+        }
+    }
+
+    DisposableEffect(url) {
+        onDispose { releasePlayer() }
+    }
+
+    // URL arrived after tap-without-URL, or after force re-resolve on error:
+    // start (or retry) playback without requiring a second tap.
+    LaunchedEffect(url) {
+        if (url != null && attachmentId != null && !isStubAudio && !missingAttachment) {
+            if (autoStartArmed || (isPreparing && player == null)) {
+                autoStartArmed = false
+                startPlayback(url)
+            }
+        }
+    }
+
     // Spec 13 bubble: play button + waveform + duration + timestamp ticks (ticks live in footer).
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp)) {
         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp).widthIn(max = 250.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilledIconButton(onClick = {
-                if (url == null) return@FilledIconButton
+            FilledIconButton(enabled = !isStubAudio && !missingAttachment, onClick = {
+                playError = null
+                if (url == null) {
+                    // Tap with no URL: resolve now (expiry/force path lives in the VM).
+                    val aid = attachmentId ?: return@FilledIconButton
+                    isPreparing = true
+                    autoStartArmed = true
+                    onResolveUrl(aid)
+                    return@FilledIconButton
+                }
                 try {
                     if (isPlaying) {
                         player?.pause(); isPlaying = false
-                    } else {
+                    } else if (player != null) {
                         isPreparing = true
-                        if (player == null) {
-                            player = MediaPlayer().apply {
-                                setDataSource(url)
-                                setOnPreparedListener {
-                                    if (knownDurationMs == null) knownDurationMs = it.duration.toLong()
-                                    it.start(); isPlaying = true; isPreparing = false
-                                }
-                                setOnCompletionListener { isPlaying = false }
-                                prepareAsync()
-                            }
-                        } else {
-                            player?.start(); isPlaying = true; isPreparing = false
-                        }
+                        player?.start(); isPlaying = true; isPreparing = false
+                    } else {
+                        startPlayback(url)
                     }
-                } catch (_: Exception) { isPreparing = false }
+                } catch (_: Exception) {
+                    releasePlayer()
+                    playError = "Can't play this audio"
+                    autoStartArmed = true
+                    val aid = attachmentId
+                    if (aid != null) onForceResolveUrl(aid)
+                }
             }, modifier = Modifier.size(40.dp)) {
                 when {
                     isPreparing -> CircularProgressIndicator(modifier = Modifier.size(20.dp))
@@ -1310,19 +1786,26 @@ private fun AudioBubbleContent(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val statusLine = when {
+                        isStubAudio -> "Empty audio stub"
+                        missingAttachment -> "Voice message (audio not linked)"
+                        playError != null -> playError!!
+                        else -> filename?.takeIf { it.isNotBlank() } ?: "🎵 Voice message"
+                    }
                     Text(
-                        filename?.takeIf { it.isNotBlank() } ?: "🎵 Voice message",
+                        statusLine,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.labelSmall,
-                        color = soft,
+                        color = if (playError != null && !isStubAudio && !missingAttachment)
+                            MaterialTheme.colorScheme.error else soft,
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     val shownDuration = knownDurationMs
-                    if (shownDuration != null && shownDuration > 0) {
+                    if (!isStubAudio && !missingAttachment && shownDuration != null && shownDuration > 0) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(formatVoiceTime(shownDuration), style = MaterialTheme.typography.labelSmall, color = soft)
-                    } else if (url == null) {
+                    } else if (url == null && attachmentId != null && !isStubAudio && playError == null) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("…", style = MaterialTheme.typography.labelSmall, color = soft)
                     }
@@ -1393,23 +1876,166 @@ private fun WaveformBars(
     }
 }
 
-/** Very subtle dot pattern for the chat background (spec 10 - no gradient). */
+/**
+ * WhatsApp-style doodle background (spec 10): deterministic scattered glyphs
+ * (rings, plus marks, arcs, rounded squares) at very low alpha over dots.
+ * Pure Canvas, no assets, theme-aware, zero backend involved.
+ */
 @Composable
 private fun ChatPatternBackground(modifier: Modifier = Modifier) {
-    val dot = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.055f)
+    val ink = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.07f)
     androidx.compose.foundation.Canvas(modifier = modifier) {
-        val step = 30.dp.toPx()
-        val r = 1.6.dp.toPx()
-        var y = step / 2
+        val step = 76.dp.toPx()
+        val rnd = kotlin.random.Random( ollacoreDoodleSeed )
         var row = 0
+        var y = step / 2
         while (y < size.height) {
             var x = step / 2 + (if (row % 2 == 1) step / 2 else 0f)
             while (x < size.width) {
-                drawCircle(dot, radius = r, center = androidx.compose.ui.geometry.Offset(x, y))
-                x += step
+                when (rnd.nextInt(5)) {
+                    0 -> drawCircle(ink, radius = 5.dp.toPx(), center = androidx.compose.ui.geometry.Offset(x, y), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.4.dp.toPx()))
+                    1 -> {
+                        val h = 7.dp.toPx()
+                        drawLine(ink, androidx.compose.ui.geometry.Offset(x - h, y), androidx.compose.ui.geometry.Offset(x + h, y), strokeWidth = 1.4.dp.toPx())
+                        drawLine(ink, androidx.compose.ui.geometry.Offset(x, y - h), androidx.compose.ui.geometry.Offset(x, y + h), strokeWidth = 1.4.dp.toPx())
+                    }
+                    2 -> drawArc(ink, 20f, 260f, false, topLeft = androidx.compose.ui.geometry.Offset(x - 6.dp.toPx(), y - 6.dp.toPx()), size = androidx.compose.ui.geometry.Size(12.dp.toPx(), 12.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.4.dp.toPx()))
+                    3 -> drawRoundRect(ink, topLeft = androidx.compose.ui.geometry.Offset(x - 5.dp.toPx(), y - 5.dp.toPx()), size = androidx.compose.ui.geometry.Size(10.dp.toPx(), 10.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx(), 3.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.4.dp.toPx()))
+                    else -> drawCircle(ink, radius = 1.6.dp.toPx(), center = androidx.compose.ui.geometry.Offset(x, y))
+                }
+                x += step + rnd.nextInt(-8, 9).dp.toPx()
+                y += rnd.nextInt(-6, 7).dp.toPx().coerceIn(-size.height, size.height)
             }
-            y += step
+            y = (row + 1) * step + step / 2
             row++
+        }
+    }
+}
+
+private const val ollacoreDoodleSeed = 20260922
+
+/** Centered system chip: encryption notice + day separators. */
+@Composable
+private fun SystemNoticeChip(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector?) {
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+            shadowElevation = 1.dp,
+            modifier = Modifier.padding(vertical = 6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                if (icon != null) {
+                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/** Calendar day of a server timestamp, null when missing/unparseable. */
+private fun messageDay(raw: String?): java.time.LocalDate? {
+    if (raw.isNullOrBlank()) return null
+    return runCatching {
+        val instant = try {
+            java.time.Instant.parse(raw)
+        } catch (_: Exception) {
+            val n = raw.toLong()
+            java.time.Instant.ofEpochMilli(if (n < 1_000_000_000_000L) n * 1000 else n)
+        }
+        instant.atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+    }.getOrNull()
+}
+
+private fun dayLabel(day: java.time.LocalDate): String {
+    val today = java.time.LocalDate.now()
+    return when {
+        day.isEqual(today) -> "Today"
+        day.isEqual(today.minusDays(1)) -> "Yesterday"
+        day.year == today.year -> day.format(java.time.format.DateTimeFormatter.ofPattern("d MMMM"))
+        else -> day.format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+    }
+}
+
+/** Message text with tappable links (client-side; no unfurl service). */
+@Composable
+private fun LinkifiedText(text: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val linkColor = if (isSystemInDarkTheme()) Color(0xFF8AB4FF) else Color(0xFF0B57D0)
+    val annotated = remember(text, linkColor) {
+        androidx.compose.ui.text.buildAnnotatedString {
+            append(text)
+            com.ollacore.app.data.util.allUrls(text).forEach { (range, url) ->
+                addStyle(
+                    style = androidx.compose.ui.text.SpanStyle(
+                        color = linkColor,
+                        textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                    ),
+                    start = range.first,
+                    end = range.last + 1
+                )
+                addStringAnnotation(tag = "URL", annotation = url, start = range.first, end = range.last + 1)
+            }
+        }
+    }
+    androidx.compose.foundation.text.ClickableText(
+        text = annotated,
+        style = MaterialTheme.typography.bodyLarge.copy(color = androidx.compose.material3.LocalContentColor.current),
+        modifier = modifier,
+        onClick = { offset ->
+            annotated.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { ann ->
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ann.item)))
+                }
+            }
+        }
+    )
+}
+
+/** Compact link preview: globe + host + URL line; tap opens the browser. */
+@Composable
+private fun LinkPreviewCard(url: String) {
+    val context = LocalContext.current
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .padding(top = 6.dp)
+            .widthIn(max = 260.dp)
+            .clickable {
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                }
+            }
+    ) {
+        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(40.dp)) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Icon(Icons.Default.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    com.ollacore.app.data.util.linkHost(url),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    url,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -1598,10 +2224,17 @@ private fun copyUriToCacheFile(context: Context, uri: Uri): File? {
     } catch (_: Exception) { null }
 }
 
-private fun bitmapToCacheFile(context: Context, bitmap: Bitmap): File? {
+/** Camera capture respects Settings > Storage > Media upload quality. */
+private fun bitmapToCacheFile(context: Context, bitmap: Bitmap, quality: Int = 80): File? {
     return try {
         val out = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-        FileOutputStream(out).use { fos -> bitmap.compress(Bitmap.CompressFormat.JPEG, 90, fos) }
+        FileOutputStream(out).use { fos -> bitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(10, 100), fos) }
         out.takeIf { it.exists() }
     } catch (_: Exception) { null }
+}
+
+private fun uploadQualityValue(name: String): Int = when (name) {
+    "high" -> 92
+    "saver" -> 65
+    else -> 80
 }

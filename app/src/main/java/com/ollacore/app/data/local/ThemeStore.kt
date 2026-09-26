@@ -19,8 +19,8 @@ class ThemeStore(private val context: Context) {
     }
 
     val mode: Flow<ThemeMode> = context.themeStore.data.map { prefs ->
-        runCatching { ThemeMode.valueOf(prefs[KEY_MODE] ?: ThemeMode.BLUE.name) }
-            .getOrElse { ThemeMode.BLUE }
+        runCatching { ThemeMode.valueOf(prefs[KEY_MODE] ?: ThemeMode.DARK.name) }
+            .getOrElse { ThemeMode.DARK }
     }
 
     suspend fun setMode(mode: ThemeMode) {

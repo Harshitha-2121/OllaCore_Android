@@ -406,7 +406,14 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun switchCamera() {
-        runCatching { cameraCapturer?.switchCamera(null) }
+        // Never pass a null handler: CameraCapturer invokes it on completion.
+        val handler = object : CameraVideoCapturer.CameraSwitchHandler {
+            override fun onCameraSwitchDone(front: Boolean) = Unit
+            override fun onCameraSwitchError(message: String) {
+                _uiState.update { it.copy(error = "Camera switch failed: $message") }
+            }
+        }
+        runCatching { cameraCapturer?.switchCamera(handler) }
     }
 
     // ── Screen share (real MediaProjection; backend re-uses the same video sender) ──

@@ -10,8 +10,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
@@ -23,6 +27,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,7 +46,16 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-private enum class HomeTab { CHATS, UPDATES, CALLS, SETTINGS }
+private enum class HomeTab { CHATS, UPDATES, COMMUNITIES, CALLS }
+
+/** WhatsApp-reference dark tokens shared by Home tabs (Updates/Communities + nav). */
+internal val WaBg = androidx.compose.ui.graphics.Color(0xFF111B21)
+internal val WaCard = androidx.compose.ui.graphics.Color(0xFF1F2C34)
+internal val WaText = androidx.compose.ui.graphics.Color(0xFFE9EDEF)
+internal val WaSub = androidx.compose.ui.graphics.Color(0xFF8696A0)
+internal val WaGreen = androidx.compose.ui.graphics.Color(0xFF00A884)
+internal val WaPill = androidx.compose.ui.graphics.Color(0xFF0D3B2E)
+internal val WaDivider = androidx.compose.ui.graphics.Color(0xFF222D34)
 
 private enum class ChatFilter { ALL, UNREAD, GROUPS, CHANNELS }
 
@@ -73,13 +87,22 @@ fun HomeScreen(
     onDevices: () -> Unit = {},
     onPrivacy: () -> Unit = {},
     onNotifications: () -> Unit = {},
-    onNewGroup: () -> Unit = {}
+    onNewGroup: () -> Unit = {},
+    // Closed/archived chats (3-dot menu; hidden from main list, section below)
+    archivedRooms: Set<String> = emptySet(),
+    // Updates-tab overflow (Settings lives here now that tabs match the reference)
+    onSettings: () -> Unit = {}
 ) {
-    var tab by rememberSaveable { mutableStateOf(HomeTab.CHATS) }
+    // Enums are not SaveableStateRegistry-compatible: persist the name, derive the tab.
+    var tabName by rememberSaveable { mutableStateOf(HomeTab.CHATS.name) }
+    var tab = runCatching { HomeTab.valueOf(tabName) }.getOrElse { HomeTab.CHATS }
     var showMenu by remember { mutableStateOf(false) }
 
     Scaffold(
+        containerColor = WaBg,
         topBar = {
+            // Updates + Communities + Calls own their in-page headers (reference layout).
+            if (tab != HomeTab.UPDATES && tab != HomeTab.COMMUNITIES && tab != HomeTab.CALLS) {
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -89,8 +112,8 @@ fun HomeScreen(
                             when (tab) {
                                 HomeTab.CHATS -> "Ollacore"
                                 HomeTab.UPDATES -> "Updates"
+                                HomeTab.COMMUNITIES -> "Communities"
                                 HomeTab.CALLS -> "Calls"
-                                HomeTab.SETTINGS -> "Settings"
                             },
                             fontWeight = FontWeight.Bold
                         )
@@ -98,7 +121,10 @@ fun HomeScreen(
                 },
                 actions = {
                     if (tab == HomeTab.CHATS) {
-                        IconButton(onClick = onSearch) {
+                        IconButton(
+                            onClick = onSearch,
+                            modifier = Modifier.testTag("search_icon")
+                        ) {
                             Icon(Icons.Default.Search, contentDescription = "Search")
                         }
                         Box {
@@ -125,13 +151,9 @@ fun HomeScreen(
                             }
                         }
                     }
-                    if (tab == HomeTab.SETTINGS) {
-                        IconButton(onClick = onProfile) {
-                            Icon(Icons.Default.Person, contentDescription = "Profile")
-                        }
-                    }
                 }
             )
+            } // end non-Updates/Communities top bar
         },
         floatingActionButton = {
             if (tab == HomeTab.CHATS) {
@@ -149,42 +171,59 @@ fun HomeScreen(
             }
         },
         bottomBar = {
-            NavigationBar {
-                // Spec 37: unread badge on Chats (small circular badge, real counts).
-                val totalUnread = remember(uiState.inbox) { uiState.inbox.sumOf { it.unreadCount } }
+            // Reference look: near-black bar, dark-green pill behind the active tab.
+            NavigationBar(containerColor = WaBg) {
+                // Bottom Chats badge = DISTINCT conversations with unread > 0
+                // (never the message sum): Alice 2 + Bob 3 shows 2, not 5.
+                val totalUnread = remember(uiState.inbox, archivedRooms) {
+                    com.ollacore.app.data.util.unreadConversationCount(uiState.inbox, archivedRooms)
+                }
+                val itemColors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = androidx.compose.ui.graphics.Color.White,
+                    selectedTextColor = androidx.compose.ui.graphics.Color.White,
+                    unselectedIconColor = WaSub,
+                    unselectedTextColor = WaSub,
+                    indicatorColor = WaPill
+                )
                 NavigationBarItem(
                     selected = tab == HomeTab.CHATS,
-                    onClick = { tab = HomeTab.CHATS },
+                    onClick = { tabName = HomeTab.CHATS.name },
                     icon = {
                         BadgedBox(
                             badge = {
                                 if (totalUnread > 0) {
-                                    Badge { Text(if (totalUnread > 99) "99+" else totalUnread.toString()) }
+                                    Badge(containerColor = WaGreen, contentColor = WaBg) {
+                                        Text(if (totalUnread > 99) "99+" else totalUnread.toString())
+                                    }
                                 }
                             }
                         ) {
                             Icon(Icons.Default.Chat, contentDescription = null)
                         }
                     },
-                    label = { Text("Chats") }
+                    label = { Text("Chats") },
+                    colors = itemColors
                 )
                 NavigationBarItem(
                     selected = tab == HomeTab.UPDATES,
-                    onClick = { tab = HomeTab.UPDATES },
+                    onClick = { tabName = HomeTab.UPDATES.name },
                     icon = { Icon(Icons.Default.Update, contentDescription = null) },
-                    label = { Text("Updates") }
+                    label = { Text("Updates") },
+                    colors = itemColors
+                )
+                NavigationBarItem(
+                    selected = tab == HomeTab.COMMUNITIES,
+                    onClick = { tabName = HomeTab.COMMUNITIES.name },
+                    icon = { Icon(Icons.Default.Groups, contentDescription = null) },
+                    label = { Text("Communities") },
+                    colors = itemColors
                 )
                 NavigationBarItem(
                     selected = tab == HomeTab.CALLS,
-                    onClick = { tab = HomeTab.CALLS },
+                    onClick = { tabName = HomeTab.CALLS.name },
                     icon = { Icon(Icons.Default.Call, contentDescription = null) },
-                    label = { Text("Calls") }
-                )
-                NavigationBarItem(
-                    selected = tab == HomeTab.SETTINGS,
-                    onClick = { tab = HomeTab.SETTINGS },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text("Settings") }
+                    label = { Text("Calls") },
+                    colors = itemColors
                 )
             }
         }
@@ -201,23 +240,26 @@ fun HomeScreen(
                     onConversationClick = onConversationClick,
                     onSearch = onSearch,
                     onRefresh = onRefresh,
+                    archivedRooms = archivedRooms,
                     modifier = Modifier.fillMaxSize()
                 )
-                HomeTab.UPDATES -> UpdatesContent(modifier = Modifier.fillMaxSize())
+                HomeTab.UPDATES -> com.ollacore.app.ui.updates.UpdatesContent(
+                    onSearch = onSearch,
+                    onSettings = onSettings,
+                    onPrivacy = onPrivacy,
+                    modifier = Modifier.fillMaxSize()
+                )
+                HomeTab.COMMUNITIES -> com.ollacore.app.ui.communities.CommunitiesContent(
+                    modifier = Modifier.fillMaxSize()
+                )
                 HomeTab.CALLS -> CallHistoryContent(
                     log = callLog,
                     onCallBack = onCallBack,
                     onDelete = onDeleteCallLog,
                     onClearAll = onClearCallLog,
-                    modifier = Modifier.fillMaxSize()
-                )
-                HomeTab.SETTINGS -> SettingsContent(
-                    displayName = uiState.displayName,
-                    phone = uiState.phone,
-                    onProfile = onProfile,
-                    onDevices = onDevices,
-                    onPrivacy = onPrivacy,
-                    onNotifications = onNotifications,
+                    onSearch = onSearch,
+                    onSettings = onSettings,
+                    onNewCall = onNewChat,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -231,16 +273,27 @@ private fun ChatsContent(
     onConversationClick: (String) -> Unit,
     onSearch: () -> Unit,
     onRefresh: () -> Unit = {},
+    archivedRooms: Set<String> = emptySet(),
     modifier: Modifier = Modifier
 ) {
-    var filter by rememberSaveable { mutableStateOf(ChatFilter.ALL) }
+    // Same SaveableStateRegistry rule as tabs: persist the enum name, not the enum.
+    var filterName by rememberSaveable { mutableStateOf(ChatFilter.ALL.name) }
+    val filter = runCatching { ChatFilter.valueOf(filterName) }.getOrElse { ChatFilter.ALL }
     val (isOnline, wasOffline) = com.ollacore.app.ui.common.rememberConnectivity()
+    var archivedOpen by rememberSaveable { mutableStateOf(false) }
 
-    val visible = remember(uiState.inbox, filter) {
+    // Closed chats never appear in the main list; they live in Archived below.
+    val unarchived = remember(uiState.inbox, archivedRooms) {
+        uiState.inbox.filter { it.roomId !in archivedRooms }
+    }
+    val archivedItems = remember(uiState.inbox, archivedRooms) {
+        uiState.inbox.filter { it.roomId in archivedRooms }
+    }
+    val visible = remember(unarchived, filter) {
         when (filter) {
-            ChatFilter.ALL -> uiState.inbox
-            ChatFilter.UNREAD -> uiState.inbox.filter { it.unreadCount > 0 }
-            ChatFilter.GROUPS -> uiState.inbox.filter { it.kind.equals("group", ignoreCase = true) }
+            ChatFilter.ALL -> unarchived
+            ChatFilter.UNREAD -> unarchived.filter { it.unreadCount > 0 }
+            ChatFilter.GROUPS -> unarchived.filter { it.kind.equals("group", ignoreCase = true) }
             ChatFilter.CHANNELS -> emptyList()
         }
     }
@@ -285,7 +338,7 @@ private fun ChatsContent(
             ChatFilter.entries.forEach { option ->
                 FilterChip(
                     selected = filter == option,
-                    onClick = { filter = option },
+                    onClick = { filterName = option.name },
                     label = {
                         Text(
                             when (option) {
@@ -360,6 +413,47 @@ private fun ChatsContent(
                         onClick = { onConversationClick(item.roomId) }
                     )
                 }
+                // Archived section (Close chat target; opening unarchives via caller).
+                if (archivedItems.isNotEmpty()) {
+                    item(key = "archived-header") {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { archivedOpen = !archivedOpen }
+                                .padding(horizontal = 20.dp, vertical = 12.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Archive,
+                                contentDescription = "Archived chats",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                "Archived (${archivedItems.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                if (archivedOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    if (archivedOpen) {
+                        items(archivedItems, key = { "arch-" + it.roomId }) { item ->
+                            InboxItemRow(
+                                item = item,
+                                myUserId = uiState.myUserId,
+                                onClick = { onConversationClick(item.roomId) }
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -374,7 +468,8 @@ fun InboxItemRow(item: InboxItem, onClick: () -> Unit, myUserId: String? = null)
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 5.dp),
+            .padding(horizontal = 12.dp, vertical = 5.dp)
+            .testTag("inbox_card"),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(
