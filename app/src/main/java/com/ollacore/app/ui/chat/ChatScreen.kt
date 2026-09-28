@@ -50,6 +50,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -164,6 +166,10 @@ fun ChatScreen(
         com.ollacore.app.data.local.ChatPrefsStore.SettingsKeys.UPLOAD_QUALITY, "balanced"
     ).collectAsState(initial = "balanced")
     var showActions by remember { mutableStateOf<MessageResponse?>(null) }
+    // Window bounds of the long-pressed bubble: anchors the context popup.
+    var selectedBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    // A new target re-anchors from scratch (never a stale position).
+    LaunchedEffect(showActions?.id) { selectedBounds = null }
     // Delete confirmation targets: 1 from the actions sheet, N from the selection toolbar.
     var deleteQueue by remember { mutableStateOf<List<MessageResponse>>(emptyList()) }
     var showEmojiPicker by remember { mutableStateOf(false) }
@@ -177,6 +183,10 @@ fun ChatScreen(
     var recentMedia by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // Context popup follows WhatsApp: any list scroll dismisses it.
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) showActions = null
+    }
     // Older history: scrolling to the very top pages backward (server has_more).
     // lastPagedSeq stops repeat calls when a page comes back empty.
     var lastPagedSeq by remember(roomId) { mutableStateOf<Int?>(null) }
@@ -572,16 +582,34 @@ fun ChatScreen(
                         },
                         onRetry = { onRetryMessage(message) },
                         onClick = {
-                            if (isDeleted) return@MessageBubble
-                            if (uiState.selectionMode) onToggleSelect(message.id) else showActions = message
+                            // Tap: in selection mode it toggles (popup follows
+                            // the latest tapped message, closes on deselect);
+                            // otherwise it opens the popup. Tombstones open
+                            // the Info-only popup without entering selection.
+                            if (isDeleted) {
+                                showActions = message
+                                return@MessageBubble
+                            }
+                            if (uiState.selectionMode) {
+                                val wasSelected = message.id in uiState.selectedIds
+                                onToggleSelect(message.id)
+                                showActions = if (wasSelected) null else message
+                            } else showActions = message
                         },
                         onLongClick = {
-                            if (isDeleted) return@MessageBubble
-                            // WhatsApp-style: long-press selects the message
-                            // (toggleSelect also enters selection mode).
+                            // Long-press: highlight + popup together
+                            // (WhatsApp-style); tombstones get the popup only.
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (isDeleted) {
+                                showActions = message
+                                return@MessageBubble
+                            }
+                            val wasSelected = message.id in uiState.selectedIds
                             onToggleSelect(message.id)
-                        }
+                            showActions = if (wasSelected) null else message
+                        },
+                        trackBounds = message.id == showActions?.id,
+                        onBounds = { selectedBounds = it }
                     )
                 }
                 }
@@ -984,20 +1012,27 @@ fun ChatScreen(
         )
     }
 
-    // Message context menu: modern bottom sheet (spec 11) - React strip +
-    // compact icon grid (Reply/Copy/Forward/Edit/Delete/Star/Select/More).
+    // Message context menu: WhatsApp-style anchored popup (spec 11) - reaction
+    // pill + vertical menu (Reply/Forward/Copy/Info/Star/Delete/More).
+    // Edit/Delete stay own-message only; Copy hides when there is no text.
     showActions?.let { message ->
         val isOwnAction = message.senderId == uiState.currentUserId ||
             (uiState.currentUserId.isBlank() && (message.senderId == "self" || message.senderId.isBlank()))
         val starredAction = message.id in uiState.starredIds
         val statusAction = uiState.messageStatus[message.id]
             ?: message.clientMessageId?.let { uiState.messageStatus[it] }
-        MessageActionsSheet(
+        val msgText = bodyString(message.body, "text") ?: ""
+        MessageContextMenu(
             message = message,
             isOwn = isOwnAction,
             isStarred = starredAction,
             status = statusAction,
-            onDismiss = { showActions = null },
+            hasText = msgText.isNotBlank(),
+            isText = message.kind.equals(MessageKinds.TEXT, ignoreCase = true),
+            isDeleted = message.id in uiState.deletedIds ||
+                message.kind.equals("deleted", ignoreCase = true),
+            anchor = selectedBounds,
+            onDismiss = { showActions = null; selectedBounds = null },
             onReply = { onReply(message); showActions = null },
             onCopy = {
                 val t = bodyString(message.body, "text") ?: ""
@@ -1073,128 +1108,12 @@ private fun quoteSnippet(msg: MessageResponse): String {
 }
 
 /**
- * Message context menu (spec 11): modern bottom sheet with a React strip
- * plus a compact icon grid - Reply/Copy/Forward/Edit/Delete/Star/Select/More.
- * Edit/Delete stay own-message only; Copy hides when there is no text.
+ * Message context menu lives in MessageContextMenu.kt now (anchored popup:
+ * reaction pill + vertical menu). This file keeps MessageInfoRow for it.
  */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun MessageActionsSheet(
-    message: MessageResponse,
-    isOwn: Boolean,
-    isStarred: Boolean,
-    status: MessageStatus?,
-    onDismiss: () -> Unit,
-    onReply: () -> Unit,
-    onCopy: () -> Unit,
-    onForward: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    onReact: (String) -> Unit,
-    onStar: () -> Unit,
-    onSelect: () -> Unit
-) {
-    var showMore by remember { mutableStateOf(false) }
-    val text = bodyString(message.body, "text") ?: ""
-    val isText = message.kind.equals(MessageKinds.TEXT, ignoreCase = true)
-
-    val actions = buildList {
-        add(Triple(Icons.Default.Reply, "Reply", onReply))
-        if (text.isNotBlank()) add(Triple(Icons.Default.ContentCopy, "Copy", onCopy))
-        add(Triple(Icons.Default.Forward, "Forward", onForward))
-        add(
-            Triple(
-                if (isStarred) Icons.Default.Star else Icons.Default.StarBorder,
-                if (isStarred) "Unstar" else "Star",
-                onStar
-            )
-        )
-        add(Triple(Icons.Default.Checklist, "Select", onSelect))
-        if (isOwn && isText) add(Triple(Icons.Default.Edit, "Edit", onEdit))
-        if (isOwn) add(Triple(Icons.Default.Delete, "Delete", onDelete))
-        add(Triple(Icons.Default.MoreHoriz, "More", { showMore = !showMore }))
-    }
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(bottom = 28.dp)) {
-            // React strip.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                listOf("👍", "❤️", "😂", "😮", "😢", "😡").forEach { emoji ->
-                    TextButton(onClick = { onReact(emoji) }) {
-                        Text(emoji, style = MaterialTheme.typography.headlineMedium)
-                    }
-                }
-            }
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            // Compact icon grid (never a huge menu: max 8 cells, 4 per row).
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 260.dp)
-                    .padding(horizontal = 8.dp),
-                userScrollEnabled = false
-            ) {
-                items(actions.size) { index ->
-                    val (icon, label, action) = actions[index]
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clickable(onClick = action)
-                            .padding(vertical = 10.dp)
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (label == "Delete") MaterialTheme.colorScheme.errorContainer
-                            else MaterialTheme.colorScheme.secondaryContainer,
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                Icon(
-                                    icon,
-                                    contentDescription = label,
-                                    tint = if (label == "Delete") MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(label, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
-            // More: message info (time, delivery state, edited, id).
-            if (showMore) {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-                    MessageInfoRow("Sent", messageTime(message.createdAt) ?: "—")
-                    MessageInfoRow(
-                        "Status",
-                        when (status) {
-                            MessageStatus.SENDING -> "Sending…"
-                            MessageStatus.SENT -> "Sent"
-                            MessageStatus.DELIVERED -> "Delivered"
-                            MessageStatus.READ -> "Read"
-                            MessageStatus.FAILED -> "Failed - use Retry in chat"
-                            null -> if (isOwn) "Sent" else "Received"
-                        }
-                    )
-                    if (message.editedAt != null) MessageInfoRow("Edited", "Yes")
-                    MessageInfoRow("Type", message.kind)
-                }
-            }
-        }
-    }
-}
 
 @Composable
-private fun MessageInfoRow(label: String, value: String) {
+internal fun MessageInfoRow(label: String, value: String) {
     Row(modifier = Modifier.padding(vertical = 2.dp)) {
         Text(
             label,
@@ -1227,7 +1146,9 @@ fun MessageBubble(
     quotedSender: String? = null,
     onQuoteClick: ((String) -> Unit)? = null,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    trackBounds: Boolean = false,
+    onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {}
 ) {
     val alignment = if (isOwn) Alignment.CenterEnd else Alignment.CenterStart
     val shape = if (isOwn) BubbleRadiusOwn else BubbleRadiusPeer
@@ -1316,7 +1237,15 @@ fun MessageBubble(
         }
     }
 
-    Box(modifier = Modifier.fillMaxWidth().background(if (isSelected) MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f) else androidx.compose.ui.graphics.Color.Transparent), contentAlignment = alignment) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (isSelected) MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f) else androidx.compose.ui.graphics.Color.Transparent)
+            .onGloballyPositioned { coords ->
+                if (trackBounds) onBounds(coords.boundsInWindow())
+            },
+        contentAlignment = alignment
+    ) {
         // Server tombstoned rows (kind=deleted, e.g. removed before this client
         // saw the event) render exactly like live-deleted ones - never the raw
         // "Unsupported message (deleted)" fallback.
@@ -2232,7 +2161,7 @@ private fun LinkPreviewCard(url: String) {
 }
 
 /** Bubble timestamp HH:mm; null when the server timestamp is missing/unparseable. */
-private fun messageTime(raw: String?): String? {
+internal fun messageTime(raw: String?): String? {
     if (raw.isNullOrBlank()) return null
     return runCatching {
         val instant = try {
