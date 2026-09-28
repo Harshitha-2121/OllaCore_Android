@@ -388,8 +388,14 @@ fun OllacoreNavHost() {
                 onSendMessage = { text ->
                     chatViewModel.sendMessage(text)
                 },
-                onEditMessage = { id, text ->
+                onStartEdit = { msg ->
+                    chatViewModel.setEditingMessage(msg)
+                },
+                onSubmitEdit = { id, text ->
                     chatViewModel.editMessage(id, text)
+                },
+                onCancelEdit = {
+                    chatViewModel.setEditingMessage(null)
                 },
                 onDeleteForEveryone = { id ->
                     chatViewModel.deleteForEveryone(id)

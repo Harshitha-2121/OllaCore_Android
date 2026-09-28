@@ -81,7 +81,9 @@ fun ChatScreen(
     roomId: String,
     onBack: () -> Unit,
     onSendMessage: (String) -> Unit,
-    onEditMessage: (String, String) -> Unit,
+    onStartEdit: (MessageResponse) -> Unit = {},
+    onSubmitEdit: (String, String) -> Unit = { _, _ -> },
+    onCancelEdit: () -> Unit = {},
     onDeleteForEveryone: (String) -> Unit,
     onDeleteForMe: (String) -> Unit,
     onAddReaction: (String, String) -> Unit,
@@ -688,6 +690,35 @@ fun ChatScreen(
                 }
             }
 
+            // Editing preview (mirrors the reply strip): original text + cancel.
+            uiState.editingMessage?.let { editing ->
+                val original = bodyString(editing.body, "text") ?: ""
+                // Prefill once per target so the user edits, not retypes.
+                LaunchedEffect(editing.id) {
+                    messageText = original
+                }
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    tonalElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Editing message", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Text(original, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                        }
+                        IconButton(onClick = { onCancelEdit(); messageText = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel edit")
+                        }
+                    }
+                }
+            }
+
             // Emoji picker (Category 1 - client-only, no backend)
             if (showEmojiPicker) {
                 Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
@@ -768,7 +799,12 @@ fun ChatScreen(
             // Desktop-style input: Enter sends, Shift+Enter inserts a newline.
             val sendNow = {
                 if (messageText.isNotBlank()) {
-                    onSendMessage(messageText.trim())
+                    val editing = uiState.editingMessage
+                    if (editing != null) {
+                        onSubmitEdit(editing.id, messageText.trim())
+                    } else {
+                        onSendMessage(messageText.trim())
+                    }
                     messageText = ""
                     onTypingStopped()
                 }
@@ -1039,10 +1075,7 @@ fun ChatScreen(
                 copyToClipboard(context, t); onCopy(t); showActions = null
             },
             onForward = { onForward(message); showActions = null },
-            onEdit = {
-                val t = bodyString(message.body, "text") ?: ""
-                onEditMessage(message.id, t); showActions = null
-            },
+            onEdit = { onStartEdit(message); showActions = null },
             onDelete = { deleteQueue = listOf(message); showActions = null },
             onReact = { emoji -> onAddReaction(message.id, emoji); showActions = null },
             onStar = { onToggleStar(message.id); showActions = null },
