@@ -1242,7 +1242,9 @@ fun MessageBubble(
                                     .background(MaterialTheme.colorScheme.primary)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
+                            // Wrap content: a weight here would force the whole
+                            // bubble to max width even for one-word quotes.
+                            Column {
                                 Text(
                                     "↩ $qName",
                                     style = MaterialTheme.typography.labelSmall,
@@ -1437,7 +1439,7 @@ private fun DeleteMessageDialog(
 }
 
 @Composable
-private fun BubbleFooter(
+private fun ColumnScope.BubbleFooter(
     message: MessageResponse,
     isStarred: Boolean,
     isSelected: Boolean,
@@ -1449,8 +1451,14 @@ private fun BubbleFooter(
     val soft = if (onGradient) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.78f)
     else MaterialTheme.colorScheme.onSurfaceVariant
     // Reference layout: timestamp + ticks tuck into the bubble's bottom-right
-    // for every message (incoming and outgoing alike).
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp, bottom = 4.dp)) {
+    // for every message (incoming and outgoing alike). The row WRAPS and aligns
+    // end: a weight spacer here would stretch every bubble to max width.
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .align(Alignment.End)
+            .padding(top = 2.dp, start = 4.dp, end = 4.dp, bottom = 4.dp)
+    ) {
         if (message.editedAt != null) {
             Text("(edited)", style = MaterialTheme.typography.labelSmall, color = soft.copy(alpha = 0.65f))
             Spacer(modifier = Modifier.width(6.dp))
@@ -1463,7 +1471,6 @@ private fun BubbleFooter(
             Icon(Icons.Default.CheckCircle, contentDescription = "Selected", modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.width(6.dp))
         }
-        Spacer(modifier = Modifier.weight(1f))
         // ── Message metadata: time · edited · delivered/read ──
         messageTime(message.createdAt)?.let { stamp ->
             Text(stamp, style = MaterialTheme.typography.labelSmall, color = soft.copy(alpha = 0.8f))
