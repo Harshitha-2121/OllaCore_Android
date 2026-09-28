@@ -134,8 +134,8 @@ fun MessageContextMenu(
         with(density) {
             val screenW = config.screenWidthDp.dp.toPx()
             val screenH = config.screenHeightDp.dp.toPx()
-            val popupW = 280.dp.toPx()
-            val estH = 500.dp.toPx()
+            val popupW = 260.dp.toPx()
+            val estH = 430.dp.toPx()
             val margin = 12.dp.toPx()
             val topGuard = 72.dp.toPx()
             val bottomGuard = 120.dp.toPx()
@@ -175,7 +175,7 @@ fun MessageContextMenu(
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.width(280.dp)
+                modifier = Modifier.width(260.dp)
             ) {
                 if (!isDeleted) {
                     ReactionBar(
@@ -227,22 +227,22 @@ private fun ReactionBar(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 CONTEXT_REACTIONS.forEach { emoji ->
                     Text(
                         emoji,
-                        fontSize = 30.sp,
+                        fontSize = 26.sp,
                         modifier = Modifier
                             .clickable(onClick = { onReact(emoji) })
-                            .padding(horizontal = 5.dp)
+                            .padding(horizontal = 4.dp)
                     )
                 }
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .padding(start = 4.dp)
-                        .size(34.dp)
+                        .padding(start = 2.dp)
+                        .size(30.dp)
                         .border(1.5.dp, Color.White.copy(alpha = 0.5f), CircleShape)
                         .clickable(onClick = onToggleExtra)
                 ) {
@@ -250,7 +250,7 @@ private fun ReactionBar(
                         Icons.Default.Add,
                         contentDescription = "More reactions",
                         tint = Color.White.copy(alpha = 0.8f),
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
@@ -265,10 +265,10 @@ private fun ReactionBar(
                     EXTRA_REACTIONS.forEach { emoji ->
                         Text(
                             emoji,
-                            fontSize = 28.sp,
+                            fontSize = 24.sp,
                             modifier = Modifier
                                 .clickable(onClick = { onReact(emoji) })
-                                .padding(horizontal = 5.dp)
+                                .padding(horizontal = 4.dp)
                         )
                     }
                 }
@@ -298,11 +298,11 @@ private fun MenuCard(
     onDismissMore: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(16.dp),
         color = PopupCard,
         shadowElevation = 8.dp
     ) {
-        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
             menuActionsFor(isOwn, hasText, isDeleted).forEach { action ->
                 when (action) {
                     MenuActionId.REPLY -> MenuRow(
@@ -335,14 +335,14 @@ private fun MenuCard(
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
-                                        .size(30.dp)
+                                        .size(26.dp)
                                         .border(1.5.dp, PopupText, CircleShape)
                                 ) {
                                     Icon(
                                         Icons.Default.MoreHoriz,
                                         contentDescription = null,
                                         tint = PopupText,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             },
@@ -378,7 +378,7 @@ private fun MenuRow(
                 icon,
                 contentDescription = null,
                 tint = if (danger) PopupDanger else PopupText,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(22.dp)
             )
         },
         label = label,
@@ -399,17 +399,17 @@ private fun MenuRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 11.dp)
-            .heightIn(min = 48.dp)
+            .padding(horizontal = 18.dp, vertical = 6.dp)
+            .heightIn(min = 40.dp)
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(30.dp)) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(26.dp)) {
             icon()
         }
-        Spacer(modifier = Modifier.width(18.dp))
+        Spacer(modifier = Modifier.width(16.dp))
         Text(
             label,
             color = if (danger) PopupDanger else PopupText,
-            style = MaterialTheme.typography.titleMedium
+            style = MaterialTheme.typography.bodyLarge
         )
     }
 }
