@@ -172,6 +172,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Local menu enforcement must be in place BEFORE history lands.
             blockedCache = runCatching { container.chatPrefsStore.blockedUsers.first() }.getOrElse { emptySet() }
             clearedBeforeSeq = runCatching { container.chatPrefsStore.getClearedBefore(roomId) }.getOrNull()
+            // Delete-for-me hides + delete-for-everyone tombstones restore BEFORE
+            // history lands, so reopened chats never flash removed content.
+            hiddenForMeCache = runCatching { container.chatPrefsStore.getHiddenForMe(roomId) }.getOrElse { emptySet() }.toMutableSet()
+            val persistedDeleted = runCatching { container.chatPrefsStore.getDeletedForEveryone(roomId) }.getOrElse { emptySet() }
+            if (persistedDeleted.isNotEmpty()) {
+                _uiState.update { it.copy(deletedIds = it.deletedIds + persistedDeleted) }
+            }
 
             val device_id = "android-${UUID.randomUUID()}"
             directoryRepo.getRoomToken(token, roomId, device_id)
@@ -285,9 +292,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // Local enforcement: blocked senders + cleared watermarks never reach the list.
+                // Local enforcement: blocked senders + cleared watermarks + delete-for-me never reach the list.
                 val cut = clearedBeforeSeq
-                if (msg.senderId in blockedCache || (cut != null && msg.eventSeq <= cut)) return
+                if (msg.senderId in blockedCache || (cut != null && msg.eventSeq <= cut) || msg.id in hiddenForMeCache) return
                 // Own-message echo: server stored it -> at least Sent ✓ (ack may arrive separately)
                 if (msg.senderId == currentUserId && msg.clientMessageId != null) {
                     setStatus(msg.clientMessageId, MessageStatus.SENT)
@@ -329,10 +336,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(uploadError = "Attachment failed: ${event.attachmentId}") }
             }
             is WebSocketEvent.MessageDeleted -> {
-                // Keep the row as a tombstone ("This message was deleted") instead
+                // Keep the row as a tombstone ("You/This message was deleted") instead
                 // of vanishing it; history reloads naturally drop it server-side.
+                // Persisted too: restarts keep the tombstone even if history returns it.
                 _uiState.update {
                     it.copy(deletedIds = it.deletedIds + event.messageId)
+                }
+                viewModelScope.launch {
+                    runCatching { container.chatPrefsStore.markDeletedForEveryone(roomId, event.messageId) }
                 }
             }
             is WebSocketEvent.ReactionAdded -> {
@@ -548,8 +559,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(editingMessage = null) }
     }
 
-    fun deleteMessage(messageId: String) {
+    /**
+     * Delete for me: CLIENT-ONLY hide (no backend per-user state exists, so
+     * the receiver's copy is untouched). Persists across restarts/reloads.
+     */
+    fun deleteForMe(messageId: String) {
+        hiddenForMeCache.add(messageId)
         viewModelScope.launch {
+            runCatching { container.chatPrefsStore.hideMessageForMe(roomId, messageId) }
+        }
+        _uiState.update { it.copy(messages = applyLocalViewFilter(it.messages)) }
+    }
+
+    /**
+     * Delete for everyone: server delete (REST+WS deleteMessage) + fanout
+     * message.deleted tombstones both sides live; history drops it
+     * server-side and the id is persisted as backup. Sender-only (UI hides
+     * the option for peer messages; server owns enforcement).
+     */
+    fun deleteForEveryone(messageId: String) {
+        _uiState.update { it.copy(deletedIds = it.deletedIds + messageId) }
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.markDeletedForEveryone(roomId, messageId) }
             chatWebSocket?.deleteMessage(roomId, messageId)
         }
     }
@@ -652,9 +683,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _menuState = MutableStateFlow(ChatMenuState())
     val menuState: StateFlow<ChatMenuState> = _menuState.asStateFlow()
 
-    // Local enforcement caches (block + clear watermarks apply to live + history).
+    // Local enforcement caches (block + clear watermarks + delete-for-me apply to live + history).
     private var blockedCache: Set<String> = emptySet()
     private var clearedBeforeSeq: Int? = null
+    private var hiddenForMeCache: MutableSet<String> = mutableSetOf()
 
     /**
      * Server validates attachments ASYNCHRONOUSLY after complete: sending the
@@ -729,11 +761,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Clear-chat watermark + blocked-sender drop (local view only; server untouched). */
+    /** Clear-chat watermark + blocked-sender drop + delete-for-me (local view only; server untouched). */
     private fun applyLocalViewFilter(msgs: List<MessageResponse>): List<MessageResponse> {
         val cut = clearedBeforeSeq
         return msgs.filter { m ->
-            (cut == null || m.eventSeq > cut) && m.senderId !in blockedCache
+            (cut == null || m.eventSeq > cut) && m.senderId !in blockedCache && m.id !in hiddenForMeCache
         }
     }
 

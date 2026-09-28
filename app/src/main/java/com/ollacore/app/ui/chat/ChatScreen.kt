@@ -80,7 +80,8 @@ fun ChatScreen(
     onBack: () -> Unit,
     onSendMessage: (String) -> Unit,
     onEditMessage: (String, String) -> Unit,
-    onDeleteMessage: (String) -> Unit,
+    onDeleteForEveryone: (String) -> Unit,
+    onDeleteForMe: (String) -> Unit,
     onAddReaction: (String, String) -> Unit,
     onReply: (MessageResponse?) -> Unit,
     onLoadMore: (Int) -> Unit,
@@ -163,6 +164,8 @@ fun ChatScreen(
         com.ollacore.app.data.local.ChatPrefsStore.SettingsKeys.UPLOAD_QUALITY, "balanced"
     ).collectAsState(initial = "balanced")
     var showActions by remember { mutableStateOf<MessageResponse?>(null) }
+    // Delete confirmation targets: 1 from the actions sheet, N from the selection toolbar.
+    var deleteQueue by remember { mutableStateOf<List<MessageResponse>>(emptyList()) }
     var showEmojiPicker by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showContactDialog by remember { mutableStateOf(false) }
@@ -389,8 +392,9 @@ fun ChatScreen(
                             Icon(Icons.Default.Star, contentDescription = "Star")
                         }
                         IconButton(onClick = {
-                            uiState.selectedIds.firstOrNull()?.let { onDeleteMessage(it) }
-                            onClearSelection()
+                            deleteQueue = uiState.selectedIds.mapNotNull { id ->
+                                uiState.messages.find { it.id == id }
+                            }
                         }) {
                             Icon(Icons.Default.Delete, contentDescription = "Delete")
                         }
@@ -1004,10 +1008,30 @@ fun ChatScreen(
                 val t = bodyString(message.body, "text") ?: ""
                 onEditMessage(message.id, t); showActions = null
             },
-            onDelete = { onDeleteMessage(message.id); showActions = null },
+            onDelete = { deleteQueue = listOf(message); showActions = null },
             onReact = { emoji -> onAddReaction(message.id, emoji); showActions = null },
             onStar = { onToggleStar(message.id); showActions = null },
             onSelect = { onToggleSelect(message.id); showActions = null }
+        )
+    }
+
+    // Delete confirmation (reference dialog): everyone = server tombstone both
+    // sides; me = local hide only. Everyone offered for own messages only.
+    if (deleteQueue.isNotEmpty()) {
+        val allOwn = deleteQueue.all { isOwnMessage(it, uiState.currentUserId) }
+        DeleteMessageDialog(
+            showEveryone = allOwn,
+            onEveryone = {
+                deleteQueue.forEach { onDeleteForEveryone(it.id) }
+                deleteQueue = emptyList()
+                onClearSelection()
+            },
+            onMe = {
+                deleteQueue.forEach { onDeleteForMe(it.id) }
+                deleteQueue = emptyList()
+                onClearSelection()
+            },
+            onDismiss = { deleteQueue = emptyList() }
         )
     }
 }
@@ -1293,30 +1317,42 @@ fun MessageBubble(
     }
 
     Box(modifier = Modifier.fillMaxWidth().background(if (isSelected) MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f) else androidx.compose.ui.graphics.Color.Transparent), contentAlignment = alignment) {
-        if (isDeleted) {
-            // WhatsApp-style tombstone: placeholder, no actions, no preview.
+        // Server tombstoned rows (kind=deleted, e.g. removed before this client
+        // saw the event) render exactly like live-deleted ones - never the raw
+        // "Unsupported message (deleted)" fallback.
+        val gone = isDeleted || message.kind.equals("deleted", ignoreCase = true)
+        if (gone) {
+            // Tombstone: placeholder bubble with blocked icon, sender-aware copy
+            // ("You…" for own, "This…" for peer) + original timestamp position.
             Surface(
                 shape = shape,
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.widthIn(max = 300.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Block,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "🚫 This message was deleted",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Block,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            tombstoneText(isOwn),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    messageTime(message.createdAt)?.let { stamp ->
+                        Text(
+                            stamp,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                            modifier = Modifier.align(Alignment.End).padding(top = 2.dp)
+                        )
+                    }
                 }
             }
             return@Box
@@ -1364,6 +1400,77 @@ private fun ForwardedLabel(isOwn: Boolean) {
             fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
             color = soft
         )
+    }
+}
+
+/** Own-message check shared by delete/selection UI. */
+private fun isOwnMessage(m: MessageResponse, currentUserId: String): Boolean =
+    m.senderId == currentUserId ||
+        (currentUserId.isBlank() && (m.senderId == "self" || m.senderId.isBlank()))
+
+/** Tombstone copy: the sender sees "You…", everyone else "This…". Pure (unit-tested). */
+fun tombstoneText(isOwn: Boolean): String =
+    if (isOwn) "You deleted this message" else "This message was deleted"
+
+/**
+ * Delete confirmation matching the reference: dark rounded card, title up
+ * top, full-width pill buttons (pink "Delete for everyone", green
+ * "Delete for me"), borderless green "Cancel". The everyone-option only
+ * renders for own messages (server enforces sender-only).
+ */
+@Composable
+private fun DeleteMessageDialog(
+    showEveryone: Boolean,
+    onEveryone: () -> Unit,
+    onMe: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp)
+            ) {
+                Text(
+                    "Delete message?",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+                if (showEveryone) {
+                    OutlinedButton(
+                        onClick = onEveryone,
+                        shape = CircleShape,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "Delete for everyone",
+                            color = ReadPink,
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+                OutlinedButton(
+                    onClick = onMe,
+                    shape = CircleShape,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Delete for me",
+                        color = com.ollacore.app.ui.theme.OllaGreenBright,
+                        modifier = Modifier.padding(vertical = 6.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = com.ollacore.app.ui.theme.OllaGreenBright)
+                }
+            }
+        }
     }
 }
 

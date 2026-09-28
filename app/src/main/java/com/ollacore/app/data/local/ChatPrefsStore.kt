@@ -30,6 +30,8 @@ class ChatPrefsStore(private val context: Context) {
         private val KEY_APP_LOCK = stringPreferencesKey("app_lock")
         private val KEY_ALIASES = stringPreferencesKey("contact_aliases_json")
         private val KEY_STARRED = stringPreferencesKey("starred_json")
+        private val KEY_HIDDEN = stringPreferencesKey("hidden_messages_json")
+        private val KEY_DELETED_EVERYONE = stringPreferencesKey("deleted_everyone_json")
         private val KEY_FAVOURITES = stringPreferencesKey("favourites_json")
         private val KEY_LISTS = stringPreferencesKey("chat_lists_json")
         private val KEY_ARCHIVED = stringPreferencesKey("archived_json")
@@ -242,6 +244,43 @@ class ChatPrefsStore(private val context: Context) {
         }
         return nowStarred
     }
+
+    // ── Message deletions, per room ──
+    // Delete-for-me: CLIENT-ONLY hidden ids (no backend per-user state exists;
+    // the receiver's copy is untouched). Delete-for-everyone: server deletes
+    // + fans out message.deleted; ids persisted here too so tombstones survive
+    // restarts even if history still returns the row.
+
+    private suspend fun readMsgMap(key: androidx.datastore.preferences.core.Preferences.Key<String>): MutableMap<String, MutableList<String>> {
+        return runCatching {
+            context.prefsStore.data.map { prefs ->
+                prefs[key]?.let { json.decodeFromString(mapSer, it) } ?: emptyMap()
+            }.first().mapValues { it.value.toMutableList() }.toMutableMap()
+        }.getOrElse { mutableMapOf() }
+    }
+
+    private suspend fun addMsgId(key: androidx.datastore.preferences.core.Preferences.Key<String>, roomId: String, messageId: String) {
+        val all = readMsgMap(key)
+        val list = all.getOrPut(roomId) { mutableListOf() }
+        if (!list.contains(messageId)) {
+            list.add(messageId)
+            context.prefsStore.edit {
+                it[key] = json.encodeToString(mapSer, all)
+            }
+        }
+    }
+
+    suspend fun getHiddenForMe(roomId: String): Set<String> =
+        readMsgMap(KEY_HIDDEN)[roomId]?.toSet() ?: emptySet()
+
+    suspend fun hideMessageForMe(roomId: String, messageId: String) =
+        addMsgId(KEY_HIDDEN, roomId, messageId)
+
+    suspend fun getDeletedForEveryone(roomId: String): Set<String> =
+        readMsgMap(KEY_DELETED_EVERYONE)[roomId]?.toSet() ?: emptySet()
+
+    suspend fun markDeletedForEveryone(roomId: String, messageId: String) =
+        addMsgId(KEY_DELETED_EVERYONE, roomId, messageId)
 
     // ── Favourite chats (CLIENT-ONLY; menu state persists) ──
 
