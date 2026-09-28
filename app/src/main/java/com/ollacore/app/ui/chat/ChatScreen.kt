@@ -295,8 +295,12 @@ fun ChatScreen(
     }
 
     val peerName = uiState.peerName ?: "Chat"
-    val isOnline = uiState.onlineUsers.isNotEmpty()
     val isGroupChat = uiState.kind.equals("group", ignoreCase = true)
+    // "online" ONLY when the 1-to-1 peer's own principal is reported online
+    // (their app open). Our own presence echo or other members must never
+    // light it; groups have no single presence.
+    val peerId = uiState.peerUserId?.takeIf { it.isNotBlank() }
+    val isOnline = !isGroupChat && peerId != null && peerId in uiState.onlineUsers
     // Typing names resolve via the participants roster (never raw ids/phone numbers);
     // 1-to-1 keeps WhatsApp-style "typing…", groups show who is typing.
     val typingNames = remember(uiState.typingUsers, uiState.participantNames, uiState.currentUserId) {
