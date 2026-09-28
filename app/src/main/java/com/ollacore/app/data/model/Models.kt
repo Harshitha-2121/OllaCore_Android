@@ -2,6 +2,12 @@ package com.ollacore.app.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonTransformingSerializer
+import kotlinx.serialization.json.buildJsonObject
 
 @Serializable
 data class OtpRequest(
@@ -155,7 +161,12 @@ data class MessageResponse(
     @SerialName("room_id") val roomId: String,
     @SerialName("sender_id") val senderId: String,
     val kind: String,
-    val body: Map<String, kotlinx.serialization.json.JsonElement>,
+    // Server sends "body": null on protocol/system rows (proven: Malavika
+    // chat $.messages[5].body). A strict Map killed the WHOLE history decode
+    // and the error text ("Unexpected JSON token") even misread as expired
+    // session. Null coerces to empty; bubbles render a blank placeholder.
+    @Serializable(with = NullAsEmptyJsonObject::class)
+    val body: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap(),
     @SerialName("created_at") val createdAt: String,
     @SerialName("event_seq") val eventSeq: Int,
     @SerialName("client_message_id") val clientMessageId: String? = null,
@@ -180,6 +191,17 @@ data class AttachmentInfo(
     val filename: String? = null,
     @SerialName("byte_size") val byteSize: Long? = null
 )
+
+/**
+ * Coerces explicit JSON null into an empty object for map fields the server
+ * sometimes nulls (message bodies on protocol/system rows).
+ */
+object NullAsEmptyJsonObject : JsonTransformingSerializer<Map<String, JsonElement>>(
+    MapSerializer(String.serializer(), JsonElement.serializer())
+) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        if (element is JsonNull) buildJsonObject {} else element
+}
 
 /**
  * Every usable attachment reference for a message: explicit attachment_ids

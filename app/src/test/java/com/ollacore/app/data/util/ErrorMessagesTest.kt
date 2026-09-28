@@ -52,6 +52,22 @@ class ErrorMessagesTest {
     }
 
     @Test
+    fun `room scoped failures are not session expired`() {
+        // Room-token exchange + 403 room-access denials must offer Retry,
+        // never "Log in again" (header loads, so the session itself is valid).
+        listOf(
+            "Failed to get room token",
+            "HTTP 403 forbidden",
+            "HTTP 403 room access denied",
+            "room token exchange failed",
+            "token"
+        ).forEach {
+            assertFalse("should not be auth: $it", isAuthError(it))
+            assertFalse(friendlyError(it) == "Your session expired. Please log in again.")
+        }
+    }
+
+    @Test
     fun `server gaps map honestly`() {
         assertEquals(
             "This is not available yet on the server.",

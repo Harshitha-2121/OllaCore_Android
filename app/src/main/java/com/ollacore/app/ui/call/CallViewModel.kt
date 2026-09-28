@@ -116,7 +116,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun clog(tag: String, msg: String) {
-        Log.i(tag, "[call=$callId room=$roomId] $msg")
+        Log.i(tag, "[call=$callId room=${_uiState.value.roomId}] $msg")
     }
 
     // Screen share (real MediaProjection, replaces previous mock toggle)
@@ -191,7 +191,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Abort before media start (e.g. camera/mic permission denied): no history, just cleanup. */
     fun abortCall(reason: String) {
-        Log.w(TAG_CALL, "[call=$callId room=$roomId] abortCall: $reason")
+        Log.w(TAG_CALL, "[call=$callId room=${_uiState.value.roomId}] abortCall: $reason")
         cancelWatchdog()
         releaseCallResources()
         _uiState.update { CallUiState(phase = CallPhase.ENDED, error = reason) }
@@ -218,6 +218,13 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private fun connectRtc(url: String, token: String, iceServers: List<IceServer>, audioOnly: Boolean) {
         try {
             eglBase = EglBase.create()
+            val stun = iceServers.count { s -> s.urls.any { u -> u.startsWith("stun") } }
+            val turn = iceServers.count { s -> s.urls.any { u -> u.startsWith("turn") } }
+            // Credential values never logged.
+            clog(TAG_WEBRTC, "iceServers=${iceServers.size} stun=$stun turn=$turn audioOnly=$audioOnly")
+            if (turn == 0) {
+                clog(TAG_WEBRTC, "STUN-only config: fine on open NATs, will fail behind symmetric NAT/restrictive firewalls (needs server TURN)")
+            }
             val configs = iceServers.map { server ->
                 PeerConnection.IceServer.builder(server.urls)
                     .apply {
@@ -236,6 +243,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 cameraCapturer = camera
             }
             cameraVideoTrack = localStream?.videoTracks?.firstOrNull()
+            clog(TAG_MEDIA, "local stream: audio=${localStream?.audioTracks?.size} video=${localStream?.videoTracks?.size}")
             _uiState.update { it.copy(localVideoTrack = cameraVideoTrack) }
             // Earpiece for voice, speaker for video; in-communication mode for both.
             audioManager().apply {
@@ -243,49 +251,72 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 isSpeakerphoneOn = _uiState.value.isSpeakerOn
             }
 
+            val gen = signalingGen
+            rtcConnected = false
             rtcWebSocket = RtcWebSocket(url, token) { event ->
-                viewModelScope.launch { handleRtcEvent(event) }
+                viewModelScope.launch {
+                    if (gen == signalingGen) handleRtcEvent(event)
+                    else Log.w(TAG_CALL, "[call=$callId] ignoring stale event from older session")
+                }
             }
             rtcWebSocket?.connect()
         } catch (e: Exception) {
-            _uiState.update { it.copy(phase = CallPhase.ENDED, error = e.message ?: "Unable to initialize call") }
+            Log.e(TAG_CALL, "[call=$callId room=${_uiState.value.roomId}] connectRtc failed", e)
+            failCall("Couldn't start the call: ${e.message ?: "camera/mic unavailable"}")
         }
     }
 
     private fun createPeerConnection(config: PeerConnection.RTCConfiguration): PeerConnection? {
         val factory = WebRTCUtils.getPeerConnectionFactory(getApplication())
+        clog(TAG_WEBRTC, "creating PeerConnection")
         return factory.createPeerConnection(config, object : PeerConnection.Observer {
-            override fun onSignalingChange(state: PeerConnection.SignalingState?) = Unit
+            override fun onSignalingChange(state: PeerConnection.SignalingState?) {
+                clog(TAG_SDP, "signalingState=$state")
+            }
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
+                clog(TAG_ICE, "iceConnectionState=$state")
                 if (state == PeerConnection.IceConnectionState.CONNECTED ||
                     state == PeerConnection.IceConnectionState.COMPLETED
                 ) {
                     markConnected()
                 } else if (state == PeerConnection.IceConnectionState.DISCONNECTED ||
-                    state == PeerConnection.IceConnectionState.CLOSED ||
-                    state == PeerConnection.IceConnectionState.FAILED
+                    state == PeerConnection.IceConnectionState.CLOSED
                 ) {
+                    clog(TAG_ICE, "ice down while phase=${_uiState.value.phase}")
                     if (_uiState.value.phase == CallPhase.CONNECTED) {
-                        _uiState.update { it.copy(phase = CallPhase.ENDED) }
+                        _uiState.update {
+                            it.copy(error = "Connection interrupted…")
+                        }
                     }
+                } else if (state == PeerConnection.IceConnectionState.FAILED) {
+                    failCall("Connection failed. Check your internet and try again.")
                 }
             }
             override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) = Unit
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
+                clog(TAG_ICE, "iceGatheringState=$state")
+            }
             override fun onIceCandidate(candidate: IceCandidate?) {
-                candidate?.let { rtcWebSocket?.sendCandidate(it.sdp, it.sdpMid ?: "", it.sdpMLineIndex) }
+                candidate?.let {
+                    clog(TAG_ICE, "local candidate mid=${it.sdpMid} idx=${it.sdpMLineIndex}")
+                    rtcWebSocket?.sendCandidate(it.sdp, it.sdpMid ?: "", it.sdpMLineIndex)
+                }
             }
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) = Unit
             override fun onAddStream(stream: MediaStream?) {
+                clog(TAG_MEDIA, "onAddStream id=${stream?.id}")
                 stream?.let { addRemoteStream(it) }
             }
             override fun onRemoveStream(stream: MediaStream?) {
                 stream?.let { removeRemoteStream(it.id) }
             }
             override fun onDataChannel(channel: DataChannel?) = Unit
-            override fun onRenegotiationNeeded() = Unit
+            override fun onRenegotiationNeeded() {
+                clog(TAG_SDP, "renegotiation needed (ignored for 1-to-1 calls)")
+            }
             override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<MediaStream>) {
                 // Unified Plan path (modern SFU): collect every remote stream for the tiles grid.
+                clog(TAG_MEDIA, "onAddTrack kind=${receiver.track()?.kind()} streams=${mediaStreams.size}")
                 if (mediaStreams.isEmpty()) {
                     receiver.track()?.let { track ->
                         if (track is VideoTrack) {
@@ -301,6 +332,63 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 markConnected()
             }
         })
+    }
+
+    /** Watchdog: never sit on "Connecting…" forever. Logs exact state, cleans up, writes FAILED. */
+    private fun startWatchdog() {
+        cancelWatchdog()
+        watchdogJob = viewModelScope.launch {
+            delay(CONNECT_TIMEOUT_MS)
+            val phase = _uiState.value.phase
+            if (phase != CallPhase.CONNECTED && phase != CallPhase.ENDED && phase != CallPhase.IDLE) {
+                val pc = peerConnection
+                Log.e(
+                    TAG_CALL,
+                    "[call=$callId room=${_uiState.value.roomId}] CONNECT TIMEOUT after ${CONNECT_TIMEOUT_MS}ms: " +
+                        "phase=$phase " +
+                        "ice=${pc?.iceConnectionState()} gather=${pc?.iceGatheringState()} " +
+                        "offerAttempts=$offerAttempts answerReceived=$answerReceived " +
+                        "pendingRemote=${pendingRemoteCandidates.size}"
+                )
+                failCall("Couldn't connect. Check your internet and try again.")
+            }
+        }
+    }
+
+    private fun cancelWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = null
+        offerRetryJob?.cancel()
+        offerRetryJob = null
+    }
+
+    /** Re-send the offer if the callee joined after it was first sent (server may not buffer). */
+    private fun scheduleOfferRetry() {
+        offerRetryJob?.cancel()
+        offerRetryJob = viewModelScope.launch {
+            repeat(MAX_OFFER_ATTEMPTS - 1) { attempt ->
+                delay(OFFER_RETRY_MS)
+                val phase = _uiState.value.phase
+                if (!answerReceived && peerConnection != null &&
+                    (phase == CallPhase.OUTGOING || phase == CallPhase.CONNECTING)
+                ) {
+                    clog(TAG_SDP, "no answer yet, re-sending offer (${attempt + 2}/$MAX_OFFER_ATTEMPTS)")
+                    createOffer()
+                } else return@launch
+            }
+        }
+    }
+
+    private fun failCall(reason: String) {
+        val s = _uiState.value
+        if (s.phase == CallPhase.IDLE || s.phase == CallPhase.ENDED) return
+        Log.e(TAG_CALL, "[call=$callId room=${_uiState.value.roomId}] failCall: $reason phase=${s.phase}")
+        val direction = if (s.isIncoming) com.ollacore.app.data.local.CallDirection.INCOMING
+        else com.ollacore.app.data.local.CallDirection.OUTGOING
+        writeLog(com.ollacore.app.data.local.CallStatus.FAILED, direction, 0L)
+        cancelWatchdog()
+        releaseCallResources()
+        _uiState.update { it.copy(phase = CallPhase.ENDED, error = reason) }
     }
 
     private fun addRemoteStream(stream: MediaStream) {
@@ -322,10 +410,14 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             if (it.phase == CallPhase.OUTGOING || it.phase == CallPhase.CONNECTING || it.phase == CallPhase.INCOMING) {
                 became = true
-                it.copy(phase = CallPhase.CONNECTED)
+                it.copy(phase = CallPhase.CONNECTED, error = null)
             } else it
         }
-        if (became && connectedEpoch == 0L) connectedEpoch = System.currentTimeMillis()
+        if (became) {
+            if (connectedEpoch == 0L) connectedEpoch = System.currentTimeMillis()
+            clog(TAG_CALL_STATE, "CONNECTED")
+            cancelWatchdog()
+        }
     }
 
     /** CLIENT-ONLY history write (fire-and-forget; scope may not survive process kill - acceptable v1). */
@@ -336,8 +428,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         val s = _uiState.value
         if (s.roomId.isBlank() || callStartEpoch == 0L) return
+        val id = if (callId.isNotBlank()) "call-$callId" else "call-${java.util.UUID.randomUUID()}"
+        clog(TAG_CALL_STATE, "history status=$status direction=$direction duration=${durationSec}s")
         val entry = com.ollacore.app.data.local.CallLogEntry(
-            id = "call-${java.util.UUID.randomUUID()}",
+            id = id,
             roomId = s.roomId,
             peerName = s.peerName,
             direction = direction,
@@ -352,13 +446,22 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun handleRtcEvent(event: RtcEvent) {
         when (event) {
             is RtcEvent.Connected -> {
+                if (rtcConnected) {
+                    clog(TAG_CALL_STATE, "duplicate socket Connected ignored")
+                    return
+                }
+                rtcConnected = true
+                clog(TAG_CALL_STATE, "socket connected, offerOnConnect=$offerOnConnect")
                 if (offerOnConnect) {
                     _uiState.update { it.copy(phase = CallPhase.CONNECTING) }
                     createOffer()
+                    scheduleOfferRetry()
                 }
                 // Callee waits for the offer here (phase stays CONNECTING).
             }
             is RtcEvent.Answer -> {
+                answerReceived = true
+                clog(TAG_SDP, "answer received len=${event.sdp.length}")
                 setRemoteDescription(SessionDescription.Type.ANSWER, event.sdp)
                 _uiState.update {
                     if (it.phase == CallPhase.OUTGOING || it.phase == CallPhase.CONNECTING) it.copy(phase = CallPhase.CONNECTING)
@@ -366,32 +469,79 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             is RtcEvent.Offer -> {
+                clog(TAG_SDP, "offer received len=${event.sdp.length} req=${event.requestId}")
                 setRemoteDescription(SessionDescription.Type.OFFER, event.sdp) {
                     addLocalTracks()
                     peerConnection?.let { pc ->
                         pc.createAnswer(object : SimpleSdpObserver() {
                             override fun onCreateSuccess(description: SessionDescription) {
+                                clog(TAG_SDP, "answer created len=${description.description.length}")
                                 pc.setLocalDescription(object : SimpleSdpObserver() {
                                     override fun onSetSuccess() {
                                         rtcWebSocket?.sendAnswer(description.description, event.requestId)
                                     }
+                                    override fun onSetFailure(error: String) {
+                                        Log.e(TAG_SDP, "[call=$callId] answer setLocal failed: $error")
+                                        _uiState.update { it.copy(error = error) }
+                                    }
                                 }, description)
                             }
                             override fun onCreateFailure(error: String) {
+                                Log.e(TAG_SDP, "[call=$callId] answer create failed: $error")
                                 _uiState.update { it.copy(error = error) }
                             }
                         }, MediaConstraints())
                     }
                 }
             }
-            is RtcEvent.ServerEvent -> when (event.event) {
-                "error" -> _uiState.update { it.copy(error = event.reason ?: "Call error") }
-                "ended", "call_ended" -> _uiState.update { it.copy(phase = CallPhase.ENDED) }
-                else -> Unit
+            is RtcEvent.Candidate -> {
+                val pc = peerConnection
+                if (pc == null) {
+                    Log.w(TAG_ICE, "[call=$callId] candidate with no PeerConnection, dropped")
+                    return
+                }
+                if (pc.remoteDescription == null) {
+                    // Classic race: ICE beats the SDP. Queue until remote desc is set.
+                    pendingRemoteCandidates.addLast(
+                        IceCandidate(event.sdpMid, event.sdpMLineIndex, event.candidate)
+                    )
+                    clog(TAG_ICE, "queued remote candidate (no remote desc yet), pending=${pendingRemoteCandidates.size}")
+                } else {
+                    val added = try {
+                        pc.addIceCandidate(
+                            IceCandidate(event.sdpMid, event.sdpMLineIndex, event.candidate)
+                        )
+                        true
+                    } catch (e: Exception) {
+                        Log.e(TAG_ICE, "[call=$callId] addIceCandidate threw", e)
+                        false
+                    }
+                    clog(TAG_ICE, "addIceCandidate mid=${event.sdpMid} idx=${event.sdpMLineIndex} ok=$added")
+                }
             }
-            is RtcEvent.Error -> _uiState.update { it.copy(error = event.message) }
+            is RtcEvent.ServerEvent -> when (event.event) {
+                "error" -> {
+                    Log.e(TAG_CALL, "[call=$callId] server error: ${event.reason}")
+                    _uiState.update { it.copy(error = event.reason ?: "Call error") }
+                }
+                "ended", "call_ended" -> {
+                    clog(TAG_CALL_STATE, "remote ended")
+                    _uiState.update { it.copy(phase = CallPhase.ENDED) }
+                }
+                else -> clog(TAG_CALL_STATE, "server event ignored: ${event.event}")
+            }
+            is RtcEvent.Error -> {
+                Log.e(TAG_CALL, "[call=$callId] signaling error: ${event.message}")
+                _uiState.update { it.copy(error = event.message) }
+            }
             is RtcEvent.Disconnected -> {
-                if (_uiState.value.phase != CallPhase.IDLE && _uiState.value.phase != CallPhase.ENDED) {
+                // Media can survive a signaling drop mid-call: keep it alive with a
+                // note instead of killing CONNECTED calls. Pre-connect drops end it.
+                if (_uiState.value.phase == CallPhase.CONNECTED) {
+                    Log.w(TAG_CALL, "[call=$callId] signaling lost mid-call, media kept alive")
+                    _uiState.update { it.copy(error = "Connection interrupted…") }
+                } else if (_uiState.value.phase != CallPhase.IDLE && _uiState.value.phase != CallPhase.ENDED) {
+                    clog(TAG_CALL_STATE, "socket dropped before connect, ending")
                     _uiState.update { it.copy(phase = CallPhase.ENDED) }
                 }
             }
@@ -415,28 +565,54 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun createOffer() {
         val pc = peerConnection ?: return
+        if (offerAttempts >= MAX_OFFER_ATTEMPTS) {
+            clog(TAG_SDP, "offer attempt cap reached ($MAX_OFFER_ATTEMPTS), waiting on watchdog")
+            return
+        }
+        offerAttempts++
         addLocalTracks()
+        clog(TAG_SDP, "creating offer (attempt $offerAttempts/$MAX_OFFER_ATTEMPTS)")
         pc.createOffer(object : SimpleSdpObserver() {
             override fun onCreateSuccess(description: SessionDescription) {
+                clog(TAG_SDP, "offer created len=${description.description.length}, setting local")
                 pc.setLocalDescription(object : SimpleSdpObserver() {
                     override fun onSetSuccess() {
+                        clog(TAG_SDP, "local offer set, sending")
                         rtcWebSocket?.sendOffer(description.description)
                     }
                     override fun onSetFailure(error: String) {
+                        Log.e(TAG_SDP, "[call=$callId] offer setLocal failed: $error")
                         _uiState.update { it.copy(error = error) }
                     }
                 }, description)
             }
             override fun onCreateFailure(error: String) {
+                Log.e(TAG_SDP, "[call=$callId] offer create failed: $error")
                 _uiState.update { it.copy(error = error) }
             }
         }, MediaConstraints())
     }
 
     private fun setRemoteDescription(type: SessionDescription.Type, sdp: String, onSuccess: (() -> Unit)? = null) {
+        clog(TAG_SDP, "setRemote $type len=${sdp.length}")
         peerConnection?.setRemoteDescription(object : SimpleSdpObserver() {
-            override fun onSetSuccess() { onSuccess?.invoke() }
-            override fun onSetFailure(error: String) { _uiState.update { it.copy(error = error) } }
+            override fun onSetSuccess() {
+                clog(TAG_SDP, "remote $type set, flushing ${pendingRemoteCandidates.size} queued candidates")
+                val queued = pendingRemoteCandidates.toList()
+                pendingRemoteCandidates.clear()
+                queued.forEach { c ->
+                    try {
+                        peerConnection?.addIceCandidate(c)
+                    } catch (e: Exception) {
+                        Log.e(TAG_ICE, "[call=$callId] queued addIceCandidate threw", e)
+                    }
+                }
+                onSuccess?.invoke()
+            }
+            override fun onSetFailure(error: String) {
+                Log.e(TAG_SDP, "[call=$callId] setRemote $type failed: $error")
+                _uiState.update { it.copy(error = error) }
+            }
         }, SessionDescription(type, sdp))
     }
 
@@ -529,7 +705,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun endCall() {
-        // CLIENT-ONLY history: connected -> completed w/ duration; rang-but-never-connected -> missed/cancelled.
+        // Truth table (never MISSED for the caller):
+        // CONNECTED -> COMPLETED w/ duration; incoming-side never-connected ->
+        // MISSED; outgoing-side never-connected -> CANCELLED.
         val s = _uiState.value
         if (s.phase != CallPhase.IDLE && s.phase != CallPhase.ENDED) {
             val direction = if (s.isIncoming) com.ollacore.app.data.local.CallDirection.INCOMING
@@ -540,12 +718,22 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     direction,
                     (System.currentTimeMillis() - connectedEpoch) / 1000L
                 )
-            } else if (s.phase == CallPhase.INCOMING || s.phase == CallPhase.CONNECTING) {
+            } else if (s.isIncoming &&
+                (s.phase == CallPhase.INCOMING || s.phase == CallPhase.CONNECTING)
+            ) {
                 writeLog(com.ollacore.app.data.local.CallStatus.MISSED, direction, 0L)
             } else {
                 writeLog(com.ollacore.app.data.local.CallStatus.CANCELLED, direction, 0L)
             }
         }
+        cancelWatchdog()
+        releaseCallResources()
+        _uiState.update { CallUiState() }
+    }
+
+    /** Full WebRTC + socket + media teardown (never before negotiation ends - only called from end/fail paths). */
+    private fun releaseCallResources() {
+        clog(TAG_CALL, "releasing call resources")
         runCatching { peerConnection?.close() }
         runCatching { rtcWebSocket?.leave() }
         runCatching { rtcWebSocket?.disconnect() }
@@ -573,7 +761,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         screenTrack = null
         screenHelper = null
         eglBase = null
-        _uiState.update { CallUiState() }
+        pendingRemoteCandidates.clear()
+        rtcConnected = false
     }
 
     override fun onCleared() {
@@ -641,3 +830,4 @@ object WebRTCUtils {
         return enumerator.createCapturer(cameraName, null) ?: error("Unable to create camera capturer")
     }
 }
+

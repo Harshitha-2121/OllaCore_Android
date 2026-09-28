@@ -1,6 +1,7 @@
 package com.ollacore.app.data.model
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -97,6 +98,43 @@ class HistoryDecodeTest {
         assertEquals("file", msg.kind)
         assertTrue(attachmentRefIds(msg).isEmpty())
         assertEquals(7000L, voiceDurationMs(msg.body))
+    }
+
+    @Test
+    fun `null body decodes to empty map instead of killing history (Malavika chat)`() {
+        // PROVEN 2026-09-28: server sent "body": null at $.messages[5].body —
+        // strict Map decode threw JsonDecodingException ("Unexpected JSON
+        // token ... had 'n' instead"), blanked the chat, and the word
+        // "token" in that error even misread as expired session.
+        val body = """
+            {
+              "messages": [
+                {
+                  "id": "m-null",
+                  "room_id": "r1",
+                  "sender_id": "u1",
+                  "kind": "text",
+                  "body": null,
+                  "created_at": "2026-09-28T08:00:00Z",
+                  "event_seq": 36
+                },
+                {
+                  "id": "m-ok",
+                  "room_id": "r1",
+                  "sender_id": "u1",
+                  "kind": "text",
+                  "body": {"text": "hi"},
+                  "created_at": "2026-09-28T08:01:00Z",
+                  "event_seq": 37
+                }
+              ],
+              "has_more": false
+            }
+        """.trimIndent()
+        val res = json.decodeFromString<MessageListResponse>(body)
+        assertEquals(2, res.messages.size)
+        assertTrue(res.messages[0].body.isEmpty())
+        assertEquals("hi", res.messages[1].body["text"]?.jsonPrimitive?.content)
     }
 
     @Test

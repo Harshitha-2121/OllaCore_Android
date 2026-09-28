@@ -12,6 +12,7 @@ import com.ollacore.app.data.e2ee.RemovalReason
 import com.ollacore.app.data.model.EncryptedMessageKind
 import com.ollacore.app.data.model.MessageResponse
 import com.ollacore.app.data.model.attachmentRefIds
+import com.ollacore.app.data.remote.ApiException
 import com.ollacore.app.data.remote.ChatWebSocket
 import com.ollacore.app.data.remote.WebSocketEvent
 import com.ollacore.app.data.remote.WsMessage
@@ -220,7 +221,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 .onFailure { e ->
                     android.util.Log.w("ChatNet", "joinRoom($roomId) failed", e)
-                    _uiState.update { it.copy(error = e.message ?: "Failed to join room") }
+                    _uiState.update { it.copy(error = apiErrorMessage(e, "Failed to join room")) }
                 }
         }
     }
@@ -513,7 +514,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             .onFailure { e ->
                 android.util.Log.w("ChatNet", "loadMessages($roomId) failed", e)
-                _uiState.update { it.copy(isLoading = false, error = e.message) }
+                _uiState.update { it.copy(isLoading = false, error = apiErrorMessage(e, "Failed to load messages")) }
             }
     }
 
@@ -1500,4 +1501,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         chatWebSocket?.disconnect()
     }
+}
+
+/**
+ * Keeps the HTTP status on API failures so [friendlyError] can tell a dead
+ * session (401) from a room-scoped failure (403/404). Without the status,
+ * any message mentioning "token" was misread as "session expired".
+ */
+private fun apiErrorMessage(e: Throwable, fallback: String): String {
+    val api = e as? ApiException ?: return e.message ?: fallback
+    val msg = api.message?.ifBlank { null } ?: fallback
+    return if (api.httpStatus != null) "HTTP ${api.httpStatus} $msg" else msg
 }

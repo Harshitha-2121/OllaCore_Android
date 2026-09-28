@@ -30,9 +30,15 @@ fun isNetworkError(raw: String?): Boolean {
 fun isAuthError(raw: String?): Boolean {
     if (raw.isNullOrBlank()) return false
     val lower = raw.lowercase()
-    return ("401" in lower || "unauthorized" in lower || "forbidden" in lower ||
-        "session" in lower || "token" in lower || "logged out" in lower) &&
-        "no address associated" !in lower
+    if ("no address associated" in lower) return false
+    // True auth failures only: 401/unauthorized + explicit expired/invalid
+    // session phrases. Bare "token"/"session"/"forbidden" substrings are NOT
+    // auth — room-token exchange failures ("failed to get room token") and
+    // HTTP 403 room-access denials must offer Retry, not "Log in again".
+    if ("401" in lower || "unauthorized" in lower) return true
+    return ("session expired" in lower || "session invalid" in lower ||
+        "logged out" in lower || "token expired" in lower ||
+        "token invalid" in lower || "token revoked" in lower)
 }
 
 fun friendlyError(raw: String?): String {
