@@ -901,9 +901,41 @@ fun OllacoreNavHost() {
             val peerName = backStackEntry.arguments?.getString("peerName") ?: "Call"
             val callViewModel: CallViewModel = viewModel()
             val callState by callViewModel.uiState.collectAsState()
+            val callContext = LocalContext.current
+            // Runtime mic/camera gate: without it startCapture throws and the
+            // call dies (or the preview stays black). Voice needs mic only.
+            var callPermsReady by remember(roomId, audioOnly) { mutableStateOf<Boolean?>(null) }
+            val callPermLauncher = rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+            ) { grants ->
+                val micOk = grants[android.Manifest.permission.RECORD_AUDIO] == true
+                val camOk = audioOnly || grants[android.Manifest.permission.CAMERA] == true
+                callPermsReady = micOk && camOk
+                if (callPermsReady != true) {
+                    callViewModel.abortCall(
+                        "Microphone${if (!audioOnly) " and camera" else ""} permission is " +
+                            "required for calls. Allow it and try again."
+                    )
+                }
+            }
 
             LaunchedEffect(roomId, incoming, audioOnly) {
-                callViewModel.joinCall(roomId, audioOnly = audioOnly, incoming = incoming, peerName = peerName)
+                val need = buildList {
+                    add(android.Manifest.permission.RECORD_AUDIO)
+                    if (!audioOnly) add(android.Manifest.permission.CAMERA)
+                }
+                val granted = need.all {
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        callContext, it
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                }
+                callPermsReady = granted
+                if (!granted) callPermLauncher.launch(need.toTypedArray())
+            }
+            LaunchedEffect(callPermsReady) {
+                if (callPermsReady == true) {
+                    callViewModel.joinCall(roomId, audioOnly = audioOnly, incoming = incoming, peerName = peerName)
+                }
             }
 
             CallScreen(

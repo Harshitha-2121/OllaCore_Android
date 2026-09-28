@@ -140,7 +140,8 @@ private fun VoiceCallUi(
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             when (phase) {
-                CallPhase.OUTGOING -> "Ringing…"
+                CallPhase.OUTGOING -> "Connecting…"
+                CallPhase.RINGING -> "Ringing…"
                 CallPhase.CONNECTING -> "Connecting…"
                 CallPhase.CONNECTED -> "Connected"
                 else -> ""
@@ -208,7 +209,8 @@ private fun VideoCallUi(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         when (uiState.phase) {
-                            CallPhase.OUTGOING -> "Ringing $peerName…"
+                            CallPhase.OUTGOING -> "Connecting…"
+                            CallPhase.RINGING -> "Ringing $peerName…"
                             CallPhase.CONNECTING -> "Connecting…"
                             else -> peerName
                         },

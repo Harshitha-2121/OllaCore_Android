@@ -43,11 +43,14 @@ import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 
 
-/** Call lifecycle: Outgoing ringing -> Connecting -> Connected; Incoming accept/decline; Ended.
+/** Call lifecycle: Outgoing dialing -> Ringing (offer sent) -> Connected on
+ * answer; Incoming accept/decline; Ended. UI text: OUTGOING = "Connecting…"
+ * (reaching the other side), RINGING = "Ringing…" (invite sent, waiting for
+ * pickup), CONNECTED on pickup/media.
  * Terminal history truth table (writeLog): CONNECTED->COMPLETED; incoming-side
  * never-connected->MISSED; outgoing-side never-connected->CANCELLED;
- * explicit decline->DECLINED; timeout/SDP/ICE failure->FAILED. */
-enum class CallPhase { IDLE, OUTGOING, INCOMING, CONNECTING, CONNECTED, ENDED }
+ * explicit decline->DECLINED; media failure->FAILED. */
+enum class CallPhase { IDLE, OUTGOING, INCOMING, RINGING, CONNECTING, CONNECTED, ENDED }
 
 data class CallUiState(
     val callId: String = "",
@@ -421,7 +424,15 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                         "localCand=$localCandidateCount remoteCand=$remoteCandidateCount " +
                         "pendingRemote=${pendingRemoteCandidates.size} turn=$hadTurnServer"
                 )
-                failCall("Couldn't connect. Check your internet and try again.")
+                if (phase == CallPhase.RINGING && !answerReceived) {
+                    // Invite rang but nobody picked up: not a media failure.
+                    failCall(
+                        "No answer. Try again later.",
+                        com.ollacore.app.data.local.CallStatus.CANCELLED
+                    )
+                } else {
+                    failCall("Couldn't connect. Check your internet and try again.")
+                }
             }
         }
     }
@@ -441,7 +452,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 delay(OFFER_RETRY_MS)
                 val phase = _uiState.value.phase
                 if (!answerReceived && peerConnection != null &&
-                    (phase == CallPhase.OUTGOING || phase == CallPhase.CONNECTING)
+                    (phase == CallPhase.OUTGOING || phase == CallPhase.RINGING ||
+                        phase == CallPhase.CONNECTING)
                 ) {
                     clog(TAG_SDP, "no answer yet, re-sending offer (${attempt + 2}/$MAX_OFFER_ATTEMPTS)")
                     createOffer()
@@ -450,13 +462,17 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun failCall(reason: String) {
+    private fun failCall(
+        reason: String,
+        status: com.ollacore.app.data.local.CallStatus =
+            com.ollacore.app.data.local.CallStatus.FAILED
+    ) {
         val s = _uiState.value
         if (s.phase == CallPhase.IDLE || s.phase == CallPhase.ENDED) return
         Log.e(TAG_CALL, "[call=$callId room=${_uiState.value.roomId}] failCall: $reason phase=${s.phase}")
         val direction = if (s.isIncoming) com.ollacore.app.data.local.CallDirection.INCOMING
         else com.ollacore.app.data.local.CallDirection.OUTGOING
-        writeLog(com.ollacore.app.data.local.CallStatus.FAILED, direction, 0L)
+        writeLog(status, direction, 0L)
         cancelWatchdog()
         releaseCallResources()
         _uiState.update { it.copy(phase = CallPhase.ENDED, error = reason) }
@@ -479,7 +495,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private fun markConnected() {
         var became = false
         _uiState.update {
-            if (it.phase == CallPhase.OUTGOING || it.phase == CallPhase.CONNECTING || it.phase == CallPhase.INCOMING) {
+            if (it.phase == CallPhase.OUTGOING || it.phase == CallPhase.RINGING ||
+                it.phase == CallPhase.CONNECTING || it.phase == CallPhase.INCOMING
+            ) {
                 became = true
                 it.copy(phase = CallPhase.CONNECTED, error = null)
             } else it
@@ -532,12 +550,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             }
             is RtcEvent.Answer -> {
                 answerReceived = true
-                clog(TAG_SDP, "answer received len=${event.sdp.length}")
+                clog(TAG_SDP, "answer received len=${event.sdp.length} (peer picked up)")
                 setRemoteDescription(SessionDescription.Type.ANSWER, event.sdp)
-                _uiState.update {
-                    if (it.phase == CallPhase.OUTGOING || it.phase == CallPhase.CONNECTING) it.copy(phase = CallPhase.CONNECTING)
-                    else it
-                }
+                // Pickup shows Connected; ICE still handshakes underneath and
+                // onIceFailed() still converts a dead handshake into FAILED.
+                markConnected()
             }
             is RtcEvent.Offer -> {
                 clog(TAG_SDP, "offer received len=${event.sdp.length} req=${event.requestId}")
@@ -649,8 +666,14 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 clog(TAG_SDP, "offer created len=${description.description.length}, setting local")
                 pc.setLocalDescription(object : SimpleSdpObserver() {
                     override fun onSetSuccess() {
-                        clog(TAG_SDP, "local offer set, sending")
+                        clog(TAG_SDP, "local offer set, sending (ringing)")
                         rtcWebSocket?.sendOffer(description.description)
+                        // Invite is on the wire: receiver's phone rings now.
+                        _uiState.update {
+                            if (it.phase == CallPhase.OUTGOING || it.phase == CallPhase.CONNECTING) {
+                                it.copy(phase = CallPhase.RINGING)
+                            } else it
+                        }
                     }
                     override fun onSetFailure(error: String) {
                         Log.e(TAG_SDP, "[call=$callId] offer setLocal failed: $error")
