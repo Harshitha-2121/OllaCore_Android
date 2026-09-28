@@ -102,6 +102,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private var rtcConnected: Boolean = false
     private var watchdogJob: Job? = null
     private var offerRetryJob: Job? = null
+    /** ICE diagnostics surfaced in failure messages (no payload logged). */
+    private var localCandidateCount: Int = 0
+    private var remoteCandidateCount: Int = 0
+    private var iceRestarts: Int = 0
+    private var hadTurnServer: Boolean = false
 
     private companion object {
         const val TAG_CALL = "[CALL]"
@@ -138,6 +143,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         answerReceived = false
         offerAttempts = 0
         rtcConnected = false
+        localCandidateCount = 0
+        remoteCandidateCount = 0
+        iceRestarts = 0
+        hadTurnServer = false
         pendingRemoteCandidates.clear()
         clog(TAG_CALL_STATE, "joinCall incoming=$incoming audioOnly=$audioOnly peer=$peerName")
         _uiState.update {
@@ -167,6 +176,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         answerReceived = false
         offerAttempts = 0
         rtcConnected = false
+        localCandidateCount = 0
+        remoteCandidateCount = 0
+        iceRestarts = 0
         pendingRemoteCandidates.clear()
         clog(TAG_CALL_STATE, "acceptIncoming")
         offerOnConnect = false
@@ -233,7 +245,18 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     .createIceServer()
             }
-            val rtcConfig = PeerConnection.RTCConfiguration(configs)
+            val rtcConfig = PeerConnection.RTCConfiguration(configs).apply {
+                // Explicit modern baseline: one bundle, muxed RTCP, TCP fallback
+                // allowed (restrictive firewalls often block UDP), and gathering
+                // that continues so late network paths are still found.
+                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+                bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+                rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+                tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.ENABLED
+                continualGatheringPolicy =
+                    PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            }
+            hadTurnServer = turn > 0
             peerConnection = createPeerConnection(rtcConfig)
             // Voice calls skip the camera entirely (no permission needed); video starts front camera.
             localStream = WebRTCUtils.createLocalStream(
@@ -289,7 +312,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 } else if (state == PeerConnection.IceConnectionState.FAILED) {
-                    failCall("Connection failed. Check your internet and try again.")
+                    onIceFailed()
                 }
             }
             override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
@@ -298,7 +321,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             }
             override fun onIceCandidate(candidate: IceCandidate?) {
                 candidate?.let {
-                    clog(TAG_ICE, "local candidate mid=${it.sdpMid} idx=${it.sdpMLineIndex}")
+                    localCandidateCount++
+                    clog(TAG_ICE, "local candidate #$localCandidateCount mid=${it.sdpMid} idx=${it.sdpMLineIndex}")
                     rtcWebSocket?.sendCandidate(it.sdp, it.sdpMid ?: "", it.sdpMLineIndex)
                 }
             }
@@ -334,6 +358,52 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         })
     }
 
+    /**
+     * ICE failed: one restart (fresh ufrag + re-offer as caller) before giving
+     * up. Rescues transient NAT-mapping failures; a second FAILED is terminal.
+     */
+    private fun onIceFailed() {
+        val phase = _uiState.value.phase
+        if (phase == CallPhase.IDLE || phase == CallPhase.ENDED) return
+        if (iceRestarts >= 1) {
+            clog(TAG_ICE, "second ICE failure, giving up (local=$localCandidateCount remote=$remoteCandidateCount)")
+            failCall(iceFailureMessage())
+            return
+        }
+        iceRestarts++
+        clog(TAG_ICE, "first ICE failure, restarting ICE (local=$localCandidateCount remote=$remoteCandidateCount)")
+        _uiState.update { it.copy(error = "Reconnecting…") }
+        val restarted = try {
+            peerConnection?.restartIce()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG_ICE, "[call=$callId] restartIce threw", e)
+            false
+        }
+        if (!restarted) {
+            failCall(iceFailureMessage())
+            return
+        }
+        if (!_uiState.value.isIncoming) {
+            // Caller re-offers with the fresh ufrag; callee answers via the
+            // normal Offer path. Watchdog still bounds the total attempt.
+            answerReceived = false
+            offerAttempts = 0
+            createOffer()
+            scheduleOfferRetry()
+        }
+    }
+
+    /** User-facing failure text with the one diagnostic that matters. */
+    private fun iceFailureMessage(): String {
+        val base = "Connection failed (you: $localCandidateCount network paths, " +
+            "peer: $remoteCandidateCount)."
+        return if (!hadTurnServer) {
+            "$base Your network may block direct calls - a TURN server is required."
+        } else {
+            "$base Check your internet and try again."
+        }
+    }
     /** Watchdog: never sit on "Connecting…" forever. Logs exact state, cleans up, writes FAILED. */
     private fun startWatchdog() {
         cancelWatchdog()
@@ -348,7 +418,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                         "phase=$phase " +
                         "ice=${pc?.iceConnectionState()} gather=${pc?.iceGatheringState()} " +
                         "offerAttempts=$offerAttempts answerReceived=$answerReceived " +
-                        "pendingRemote=${pendingRemoteCandidates.size}"
+                        "localCand=$localCandidateCount remoteCand=$remoteCandidateCount " +
+                        "pendingRemote=${pendingRemoteCandidates.size} turn=$hadTurnServer"
                 )
                 failCall("Couldn't connect. Check your internet and try again.")
             }
@@ -500,6 +571,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                     Log.w(TAG_ICE, "[call=$callId] candidate with no PeerConnection, dropped")
                     return
                 }
+                remoteCandidateCount++
                 if (pc.remoteDescription == null) {
                     // Classic race: ICE beats the SDP. Queue until remote desc is set.
                     pendingRemoteCandidates.addLast(
