@@ -8,87 +8,68 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import com.ollacore.app.data.local.ThemeMode
 
-// Official Ollacore brand schemes. Dynamic wallpaper tinting stays OFF
-// so the Ollacore identity holds on every device.
+// Ollacore pink identity. Dynamic wallpaper tinting stays OFF so the
+// Ollacore identity holds on every device.
 //
-// Spec 29 (dark, deliberate - not inverted): bg #0B1120, surface #111827,
-// card #172033, text #F8FAFC, secondary #94A3B8, blue/purple/green accents.
-// Spec 30 (light, default): white, #F8FAFC, light blue-gray, minimal shadow.
-private val DarkBlueScheme = darkColorScheme(
-    primary = Color(0xFF8B9DFF),
-    onPrimary = Color(0xFF0F172A),
-    primaryContainer = Color(0xFF2A3565),
-    onPrimaryContainer = Color(0xFFE2E6FF),
-    secondary = Color(0xFF34D399),
-    onSecondary = Color(0xFF062B16),
-    secondaryContainer = Color(0xFF0E3B2A),
-    onSecondaryContainer = Color(0xFFC9F2D8),
-    tertiary = Color(0xFFA78BFA),
-    onTertiary = Color(0xFF2A1656),
-    tertiaryContainer = Color(0xFF3B2A63),
-    onTertiaryContainer = Color(0xFFE4D9FF),
-    background = Color(0xFF0B1120),
-    onBackground = Color(0xFFF8FAFC),
-    surface = Color(0xFF111827),
-    onSurface = Color(0xFFF8FAFC),
-    surfaceVariant = Color(0xFF172033),
-    onSurfaceVariant = Color(0xFF94A3B8),
-    outline = Color(0xFF334155),
-    error = Color(0xFFF87171),
-    onError = Color(0xFF450A0A)
-)
-
-private val DarkGreenScheme = DarkBlueScheme.copy(
-    primary = Color(0xFF34D399),
-    onPrimary = Color(0xFF062B16),
-    primaryContainer = Color(0xFF0E3B2A),
-    onPrimaryContainer = Color(0xFFC9F2D8)
-)
-
-private val DarkPurpleScheme = DarkBlueScheme.copy(
-    primary = Color(0xFFA78BFA),
-    onPrimary = Color(0xFF2A1656),
-    primaryContainer = Color(0xFF3B2A63),
-    onPrimaryContainer = Color(0xFFE4D9FF)
-)
-
-private val LightBlueScheme = lightColorScheme(
-    primary = Color(0xFF5366FF),
+// Light: pastel pink/cream background (#FBEFF3), white surfaces, deep-plum
+// text, purple/magenta primary. Dark: near-black warm plum background,
+// pink-tinted surfaces, light lavender primary. One primary family in both
+// modes - never blue/green/orange outside semantic (success/warning/error)
+// states.
+private val LightBrandScheme = lightColorScheme(
+    primary = Color(0xFFA21CAF),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFE2E6FF),
-    onPrimaryContainer = Color(0xFF0F172A),
-    secondary = Color(0xFF10B981),
+    primaryContainer = Color(0xFFF5D0FE),
+    onPrimaryContainer = Color(0xFF4A044E),
+    secondary = Color(0xFFEC4899),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD1FAE5),
-    onSecondaryContainer = Color(0xFF064E3B),
-    tertiary = Color(0xFF8B5CF6),
+    secondaryContainer = Color(0xFFFCE7F3),
+    onSecondaryContainer = Color(0xFF831843),
+    tertiary = Color(0xFF7C3AED),
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFEDE9FE),
-    onTertiaryContainer = Color(0xFF2A1656),
-    background = Color(0xFFF8FAFC),
-    onBackground = Color(0xFF334155),
+    onTertiaryContainer = Color(0xFF3B1470),
+    background = Color(0xFFFBEFF3),
+    onBackground = Color(0xFF4A2530),
     surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF334155),
-    surfaceVariant = Color(0xFFF1F5F9),
-    onSurfaceVariant = Color(0xFF64748B),
-    outline = Color(0xFFE2E8F0),
+    onSurface = Color(0xFF4A2530),
+    surfaceVariant = Color(0xFFF6E3EA),
+    onSurfaceVariant = Color(0xFF8A6570),
+    outline = Color(0xFFE7C6D2),
     error = Color(0xFFEF4444),
     onError = Color.White
 )
 
-private val LightGreenScheme = LightBlueScheme.copy(
-    primary = Color(0xFF10B981),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFD1FAE5),
-    onPrimaryContainer = Color(0xFF064E3B)
+private val DarkBrandScheme = darkColorScheme(
+    primary = Color(0xFFE9A6F5),
+    onPrimary = Color(0xFF3B0A2E),
+    primaryContainer = Color(0xFF5C1A4E),
+    onPrimaryContainer = Color(0xFFFBDDF5),
+    secondary = Color(0xFFF472B6),
+    onSecondary = Color(0xFF3B0A1E),
+    secondaryContainer = Color(0xFF5C1A34),
+    onSecondaryContainer = Color(0xFFFBDDF0),
+    tertiary = Color(0xFFC4B5FD),
+    onTertiary = Color(0xFF2E1065),
+    tertiaryContainer = Color(0xFF4C1D95),
+    onTertiaryContainer = Color(0xFFEDE9FE),
+    background = Color(0xFF150A10),
+    onBackground = Color(0xFFF9EDEF),
+    surface = Color(0xFF211016),
+    onSurface = Color(0xFFF9EDEF),
+    surfaceVariant = Color(0xFF2F1A23),
+    onSurfaceVariant = Color(0xFFC998A8),
+    outline = Color(0xFF4A2B37),
+    error = Color(0xFFF87171),
+    onError = Color(0xFF450A0A)
 )
 
-private val LightPurpleScheme = LightBlueScheme.copy(
-    primary = Color(0xFF8B5CF6),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFEDE9FE),
-    onPrimaryContainer = Color(0xFF2A1656)
-)
+/**
+ * Single source of truth for light/dark resolution (also unit-tested):
+ * DARK forces dark, LIGHT forces light, every other mode follows the system.
+ */
+fun resolveDarkTheme(themeMode: ThemeMode, systemDark: Boolean): Boolean =
+    themeMode == ThemeMode.DARK || (themeMode != ThemeMode.LIGHT && systemDark)
 
 /**
  * Spec 31: theme changes propagate to buttons, FAB, selected tabs,
@@ -101,14 +82,14 @@ fun OllacoreTheme(
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    // DARK forces dark; every other mode follows the system (spec 31: Dark + System Default).
-    val effectiveDark = themeMode == ThemeMode.DARK || darkTheme
+    // DARK forces dark, LIGHT forces light; every other mode follows the
+    // system (spec 31: Dark + Light + System Default).
+    val effectiveDark = resolveDarkTheme(themeMode, darkTheme)
 
-    val colorScheme = when (themeMode) {
-        ThemeMode.GREEN -> if (effectiveDark) DarkGreenScheme else LightGreenScheme
-        ThemeMode.PURPLE -> if (effectiveDark) DarkPurpleScheme else LightPurpleScheme
-        else -> if (effectiveDark) DarkBlueScheme else LightBlueScheme
-    }
+    // One brand identity: every accent mode renders the pink/purple family
+    // (legacy Blue/Green/Purple choices converge here); only the
+    // light/dark tuning differs.
+    val colorScheme = if (effectiveDark) DarkBrandScheme else LightBrandScheme
 
     val finalScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {

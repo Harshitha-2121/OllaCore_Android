@@ -21,7 +21,7 @@ private val Context.localStore by preferencesDataStore(name = "ollacore_local")
 enum class CallDirection { OUTGOING, INCOMING }
 
 @Serializable
-enum class CallStatus { COMPLETED, MISSED, CANCELLED }
+enum class CallStatus { COMPLETED, MISSED, CANCELLED, DECLINED, FAILED }
 
 @Serializable
 data class CallLogEntry(

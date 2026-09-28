@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.map
 
 private val Context.themeStore by preferencesDataStore(name = "ollacore_theme")
 
-/** Spec 31: user-selectable theme (CLIENT-ONLY). */
-enum class ThemeMode { BLUE, GREEN, PURPLE, DARK, SYSTEM }
+/** Spec 31: user-selectable theme (CLIENT-ONLY). LIGHT/DARK force the scheme; otherwise the system decides. */
+enum class ThemeMode { BLUE, GREEN, PURPLE, LIGHT, DARK, SYSTEM }
 
 class ThemeStore(private val context: Context) {
 

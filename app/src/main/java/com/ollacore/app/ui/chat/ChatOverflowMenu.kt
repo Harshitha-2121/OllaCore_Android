@@ -18,11 +18,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.ollacore.app.data.local.ChatPrefsStore
 
-private val MenuDark = Color(0xFF1F2937)
-private val MenuDarkText = Color(0xFFF9FAFB)
-private val MenuDarkSub = Color(0xFF9CA3AF)
-private val MenuDarkDivider = Color(0xFF374151)
-private val MenuDarkDanger = Color(0xFFF87171)
+/** Overflow-menu tokens: theme-derived so the popup matches Light/Dark mode. */
+private val MenuDark: Color @Composable get() = MaterialTheme.colorScheme.surface
+private val MenuDarkText: Color @Composable get() = MaterialTheme.colorScheme.onSurface
+private val MenuDarkSub: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val MenuDarkDivider: Color @Composable get() = MaterialTheme.colorScheme.outline
+private val MenuDarkDanger: Color @Composable get() = MaterialTheme.colorScheme.error
 
 /** Which modal dialog the overflow menu has open (menu stays mounted behind). */
 private enum class MenuDialog {

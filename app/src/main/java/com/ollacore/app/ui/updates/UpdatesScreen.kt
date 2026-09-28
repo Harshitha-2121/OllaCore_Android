@@ -32,9 +32,6 @@ import com.ollacore.app.ui.home.WaSub
 import com.ollacore.app.ui.home.WaText
 import com.ollacore.app.ui.theme.BrandAvatar
 
-// WhatsApp-reference dark palette (page forces dark, independent of app theme).
-private val SheetDark = Color(0xFF1F2C34)
-
 // Real-data binding points. The Status/Channels backend services do not exist
 // yet (see OLLACORE-BACKEND-SPEC.txt), so both lists are empty and the page
 // renders its empty states. When the backend lands, feed these lists from the
@@ -107,7 +104,7 @@ fun UpdatesContent(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false },
                         shape = RoundedCornerShape(16.dp),
-                        containerColor = SheetDark,
+                        containerColor = MaterialTheme.colorScheme.surface,
                         modifier = Modifier.widthIn(min = 230.dp, max = 290.dp)
                     ) {
                         UpdatesMenuRow(Icons.Default.GroupAdd, "Create channel") {
@@ -272,7 +269,7 @@ fun UpdatesContent(
                     .clickable { dialog = UpdatesDialog.STATUS_COMPOSER }
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(Icons.Default.PhotoCamera, contentDescription = "New photo status", tint = WaBg)
+                    Icon(Icons.Default.PhotoCamera, contentDescription = "New photo status", tint = MaterialTheme.colorScheme.onPrimary)
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
@@ -283,7 +280,7 @@ fun UpdatesContent(
                             .background(WaGreen)
                             .border(2.dp, WaBg, CircleShape)
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = WaBg, modifier = Modifier.size(14.dp))
+                        Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
                     }
                 }
             }
@@ -357,7 +354,7 @@ private fun AddStatusCard(onClick: () -> Unit) {
                     .background(WaGreen)
                     .border(2.dp, WaBg, CircleShape)
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add status", tint = WaBg, modifier = Modifier.size(14.dp))
+                Icon(Icons.Default.Add, contentDescription = "Add status", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
@@ -442,7 +439,7 @@ private fun ChannelRow(channel: ChannelEntry, onClick: () -> Unit) {
                 ) {
                     Text(
                         if (channel.unread > 99) "99+" else channel.unread.toString(),
-                        color = WaBg, fontSize = 12.sp, fontWeight = FontWeight.Bold
+                        color = MaterialTheme.colorScheme.onPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold
                     )
                 }
             }

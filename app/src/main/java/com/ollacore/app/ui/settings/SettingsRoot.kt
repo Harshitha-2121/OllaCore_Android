@@ -16,6 +16,7 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -223,15 +224,27 @@ private fun NavRow(
     icon: ImageVector,
     title: String,
     subtitle: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    dot: Boolean = false
 ) {
     ListItem(
         headlineContent = { Text(title, color = WaText) },
         supportingContent = { Text(subtitle, color = WaSub) },
         leadingContent = { Icon(icon, contentDescription = null, tint = WaGreen) },
         trailingContent = {
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null,
-                tint = WaSub, modifier = Modifier.size(18.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (dot) {
+                    Box(
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(WaGreen)
+                    )
+                }
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null,
+                    tint = WaSub, modifier = Modifier.size(18.dp))
+            }
         },
         colors = ListItemDefaults.colors(containerColor = WaBg),
         modifier = Modifier.clickable(onClick = onClick)
@@ -277,6 +290,10 @@ private fun SettingsHome(
     val phone by prefsSessionPhone()
     var note by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showTheme by remember { mutableStateOf(false) }
+    var showLists by remember { mutableStateOf(false) }
+    val lists by prefs.chatLists.collectAsState(initial = emptyMap())
+    val listsSubtitle =
+        if (lists.isEmpty()) "Manage people and groups" else "${lists.size} lists"
 
     fun backend(title: String, what: String) {
         note = title to "$what needs backend support that does not exist yet. " +
@@ -316,8 +333,8 @@ private fun SettingsHome(
         SectionLabel("Account")
         NavRow(Icons.Default.Payments, "Payments", "Not available yet",
             onClick = { backend("Payments", "In-chat payments") })
-        NavRow(Icons.Default.CardMembership, "Subscriptions", "Not available yet",
-            onClick = { backend("Subscriptions", "Subscriptions") })
+        NavRow(Icons.Default.CardMembership, "Subscriptions", "Explore premium benefits",
+            onClick = { backend("Subscriptions", "Subscriptions") }, dot = true)
         NavRow(Icons.Default.Devices, "Linked devices", "Manage where you use Ollacore",
             onClick = onDevices)
         NavRow(Icons.Default.Person, "Account", "Security notifications, change number",
@@ -359,6 +376,32 @@ private fun SettingsHome(
         NavRow(Icons.Default.LocationOn, "Live location", "Not available yet",
             onClick = { backend("Live location", "Live location sharing") })
 
+        // ── 3b. Lists (reference parity): real lists from the local store.
+        SectionLabel("Lists")
+        NavRow(Icons.Default.Groups, "Manage lists", listsSubtitle,
+            onClick = { showLists = true })
+        if (showLists) {
+            AlertDialog(
+                onDismissRequest = { showLists = false },
+                title = { Text("Lists") },
+                text = {
+                    Text(
+                        if (lists.isEmpty()) {
+                            "No lists yet. Create one from any chat: open the chat menu " +
+                                "(⋮) > Lists > New list, then tick chats into it."
+                        } else {
+                            lists.keys.sorted().joinToString("\n") { name ->
+                                "• $name (${lists[name]?.size ?: 0})"
+                            } + "\n\nAdd or remove chats from any chat menu (⋮) > Lists."
+                        }
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showLists = false }) { Text("Got it") }
+                }
+            )
+        }
+
         // ── 4. Chats ──
         SectionLabel("Chats")
         NavRow(Icons.Default.Backup, "Chat history / backup", "Export info",
@@ -379,7 +422,7 @@ private fun SettingsHome(
 
         // ── 5. Appearance ──
         SectionLabel("Appearance")
-        NavRow(Icons.Default.Palette, "Chat theme", "Ollacore Blue/Green/Purple/Dark/System",
+        NavRow(Icons.Default.Palette, "Chat theme", "Pink theme, Light / Dark / System",
             onClick = { showTheme = true })
         NavRow(Icons.Default.Apps, "App icon", "Default icon",
             onClick = {

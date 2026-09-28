@@ -5,12 +5,15 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.media.projection.MediaProjection
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ollacore.app.OllacoreApp
 import com.ollacore.app.data.model.IceServer
 import com.ollacore.app.data.remote.RtcEvent
 import com.ollacore.app.data.remote.RtcWebSocket
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,7 +43,10 @@ import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 
 
-/** Call lifecycle: Outgoing ringing -> Connecting -> Connected; Incoming accept/decline; Ended. */
+/** Call lifecycle: Outgoing ringing -> Connecting -> Connected; Incoming accept/decline; Ended.
+ * Terminal history truth table (writeLog): CONNECTED->COMPLETED; incoming-side
+ * never-connected->MISSED; outgoing-side never-connected->CANCELLED;
+ * explicit decline->DECLINED; timeout/SDP/ICE failure->FAILED. */
 enum class CallPhase { IDLE, OUTGOING, INCOMING, CONNECTING, CONNECTED, ENDED }
 
 data class CallUiState(
@@ -84,6 +90,35 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private var videoSender: RtpSender? = null
     private var offerOnConnect: Boolean = true
 
+    // ── Signaling diagnostics + race guards ──
+    /** Local call id for logs/history (server call_id is not passed to this route). */
+    private var callId: String = ""
+    /** Incremented per call session; stale socket events from older sessions are ignored. */
+    private var signalingGen: Int = 0
+    /** Remote ICE received before setRemoteDescription: queued, flushed after. */
+    private val pendingRemoteCandidates = ArrayDeque<IceCandidate>()
+    private var answerReceived: Boolean = false
+    private var offerAttempts: Int = 0
+    private var rtcConnected: Boolean = false
+    private var watchdogJob: Job? = null
+    private var offerRetryJob: Job? = null
+
+    private companion object {
+        const val TAG_CALL = "[CALL]"
+        const val TAG_WEBRTC = "[WEBRTC]"
+        const val TAG_SDP = "[SDP]"
+        const val TAG_ICE = "[ICE]"
+        const val TAG_MEDIA = "[MEDIA]"
+        const val TAG_CALL_STATE = "[CALL_STATE]"
+        const val CONNECT_TIMEOUT_MS = 45_000L
+        const val OFFER_RETRY_MS = 12_000L
+        const val MAX_OFFER_ATTEMPTS = 3
+    }
+
+    private fun clog(tag: String, msg: String) {
+        Log.i(tag, "[call=$callId room=$roomId] $msg")
+    }
+
     // Screen share (real MediaProjection, replaces previous mock toggle)
     private var screenCapturer: ScreenCapturerAndroid? = null
     private var screenTrack: VideoTrack? = null
@@ -98,6 +133,13 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun joinCall(roomId: String, audioOnly: Boolean = false, incoming: Boolean = false, peerName: String = "") {
         callStartEpoch = System.currentTimeMillis()
         connectedEpoch = 0L
+        callId = java.util.UUID.randomUUID().toString()
+        signalingGen++
+        answerReceived = false
+        offerAttempts = 0
+        rtcConnected = false
+        pendingRemoteCandidates.clear()
+        clog(TAG_CALL_STATE, "joinCall incoming=$incoming audioOnly=$audioOnly peer=$peerName")
         _uiState.update {
             CallUiState(
                 roomId = roomId,
@@ -111,6 +153,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (!incoming) {
             offerOnConnect = true
+            startWatchdog()
             connectAsPeer(roomId, audioOnly)
         }
     }
@@ -119,22 +162,39 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun acceptIncoming() {
         val roomId = _uiState.value.roomId
         if (roomId.isBlank()) return
+        if (callId.isBlank()) callId = java.util.UUID.randomUUID().toString()
+        signalingGen++
+        answerReceived = false
+        offerAttempts = 0
+        rtcConnected = false
+        pendingRemoteCandidates.clear()
+        clog(TAG_CALL_STATE, "acceptIncoming")
         offerOnConnect = false
         _uiState.update { it.copy(phase = CallPhase.CONNECTING, error = null) }
+        startWatchdog()
         connectAsPeer(roomId, _uiState.value.audioOnly)
     }
 
-    /** Decline an incoming call (no RTC joined; caller times out / leaves). Logged as missed. */
+    /** Decline an incoming call (no RTC joined). Logged as DECLINED, never missed. */
     fun declineIncoming() {
         val s = _uiState.value
+        clog(TAG_CALL_STATE, "declineIncoming phase=${s.phase}")
         if (s.phase == CallPhase.INCOMING || s.phase == CallPhase.CONNECTING) {
             writeLog(
-                com.ollacore.app.data.local.CallStatus.MISSED,
+                com.ollacore.app.data.local.CallStatus.DECLINED,
                 direction = com.ollacore.app.data.local.CallDirection.INCOMING,
                 durationSec = 0L
             )
         }
         _uiState.update { it.copy(phase = CallPhase.ENDED) }
+    }
+
+    /** Abort before media start (e.g. camera/mic permission denied): no history, just cleanup. */
+    fun abortCall(reason: String) {
+        Log.w(TAG_CALL, "[call=$callId room=$roomId] abortCall: $reason")
+        cancelWatchdog()
+        releaseCallResources()
+        _uiState.update { CallUiState(phase = CallPhase.ENDED, error = reason) }
     }
 
     private fun connectAsPeer(roomId: String, audioOnly: Boolean) {

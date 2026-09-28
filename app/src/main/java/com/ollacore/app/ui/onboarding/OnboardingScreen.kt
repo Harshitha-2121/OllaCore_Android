@@ -31,7 +31,6 @@ import com.ollacore.app.ui.theme.BrandGradient
 import com.ollacore.app.ui.theme.GradientButton
 import com.ollacore.app.ui.theme.HeroWash
 import com.ollacore.app.ui.theme.OLLACORE_TAGLINE
-import com.ollacore.app.ui.theme.OllaPrimaryBlue
 import com.ollacore.app.ui.theme.OllacoreLogo
 import kotlinx.coroutines.launch
 

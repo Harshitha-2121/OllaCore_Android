@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -21,6 +22,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -40,8 +42,11 @@ import com.ollacore.app.ui.chat.ChatScreen
 import com.ollacore.app.ui.chat.ChatViewModel
 import com.ollacore.app.ui.contact.ContactInfoScreen
 import com.ollacore.app.ui.contact.ContactInfoViewModel
+import com.ollacore.app.ui.contacts.ContactDetailsScreen
 import com.ollacore.app.ui.contacts.ContactsScreen
 import com.ollacore.app.ui.contacts.ContactsViewModel
+import com.ollacore.app.ui.contacts.NewChatScreen
+import com.ollacore.app.ui.contacts.NewContactScreen
 import com.ollacore.app.ui.devices.DevicesScreen
 import com.ollacore.app.ui.docs.DocumentViewerScreen
 import com.ollacore.app.ui.media.ImageViewerScreen
@@ -80,6 +85,19 @@ class MainActivity : ComponentActivity() {
             val themeMode by themeStore.mode.collectAsState(
                 initial = com.ollacore.app.data.local.ThemeMode.DARK
             )
+            // Edge-to-edge bars: keep status/nav icons readable in both
+            // themes (dark icons on light, light icons on dark).
+            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+            val effectiveDark = remember(themeMode, systemDark) {
+                com.ollacore.app.ui.theme.resolveDarkTheme(themeMode, systemDark)
+            }
+            SideEffect {
+                androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                    .apply {
+                        isAppearanceLightStatusBars = !effectiveDark
+                        isAppearanceLightNavigationBars = !effectiveDark
+                    }
+            }
             // Settings > Accessibility > Text size: app-wide font scaling.
             val settingsPrefs = remember(appContext) {
                 com.ollacore.app.data.local.ChatPrefsStore(appContext)
@@ -256,6 +274,13 @@ fun OllacoreNavHost() {
             val archivedRooms by remember(homeContext) {
                 com.ollacore.app.data.local.ChatPrefsStore(homeContext.applicationContext).archivedRooms
             }.collectAsState(initial = emptySet())
+            val pinnedRooms by remember(homeContext) {
+                com.ollacore.app.data.local.ChatPrefsStore(homeContext.applicationContext).pinnedRooms
+            }.collectAsState(initial = emptySet())
+            val mutedRooms by remember(homeContext) {
+                com.ollacore.app.data.local.ChatPrefsStore(homeContext.applicationContext).mutedRooms
+            }.collectAsState(initial = emptySet())
+            val selectedChatIds by homeViewModel.selectedIds.collectAsState()
 
             HomeScreen(
                 uiState = homeState,
@@ -264,7 +289,7 @@ fun OllacoreNavHost() {
                     homeViewModel.markOpened(roomId)
                     navController.navigate("chat/$roomId")
                 },
-                onNewChat = { navController.navigate("contacts") },
+                onNewChat = { navController.navigate("newChat") },
                 onProfile = { navController.navigate("profile") },
                 onRefresh = { homeViewModel.refresh() },
                 onSearch = { navController.navigate("globalSearch") },
@@ -283,8 +308,30 @@ fun OllacoreNavHost() {
                 onPrivacy = { navController.navigate("privacy") },
                 onNotifications = { navController.navigate("notifSettings") },
                 onNewGroup = { navController.navigate("newGroup") },
+                onNewCommunity = {
+                    // No community-creation backend exists yet: honest placeholder.
+                    android.widget.Toast.makeText(
+                        navController.context,
+                        "Communities are coming soon",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                },
                 onSettings = { navController.navigate("settings") },
-                archivedRooms = archivedRooms
+                archivedRooms = archivedRooms,
+                selectedIds = selectedChatIds,
+                pinnedRooms = pinnedRooms,
+                mutedRooms = mutedRooms,
+                onToggleSelect = { homeViewModel.toggleChatSelect(it) },
+                onClearSelection = { homeViewModel.clearChatSelection() },
+                onSelectAll = {
+                    homeViewModel.selectAllChats(
+                        homeState.inbox.map { it.roomId } - archivedRooms
+                    )
+                },
+                onTogglePin = { homeViewModel.togglePinSelected() },
+                onToggleMute = { homeViewModel.toggleMuteSelected() },
+                onToggleArchive = { homeViewModel.toggleArchiveSelected() },
+                onDeleteSelected = { homeViewModel.deleteSelected() }
             )
         }
 
@@ -524,31 +571,111 @@ fun OllacoreNavHost() {
         composable("contacts") {
             val contactsViewModel: ContactsViewModel = viewModel()
             val contactsState by contactsViewModel.uiState.collectAsState()
-            val scope = rememberCoroutineScope()
 
             ContactsScreen(
-                contacts = contactsState.contacts,
-                isLoading = contactsState.isLoading,
+                state = contactsState,
+                viewModel = contactsViewModel,
                 onBack = { navController.popBackStack() },
-                onContactClick = { userId ->
-                    scope.launch {
-                        contactsViewModel.openDirect(userId)?.let { targetRoomId ->
-                            navController.navigate("chat/$targetRoomId")
-                        }
-                    }
+                onOpenDetails = { row ->
+                    navController.navigate("contactDetails/${Uri.encode(row.key)}")
                 },
                 onRefresh = { contactsViewModel.refresh() },
                 onNewGroup = { navController.navigate("newGroup") },
-                onAddByPhone = { phone ->
-                    scope.launch {
-                        contactsViewModel.lookupUserId(phone)?.let { userId ->
-                            contactsViewModel.openDirect(userId)?.let { targetRoomId ->
-                                navController.navigate("chat/$targetRoomId")
-                            }
-                        }
-                    }
+                onOpenChat = { targetRoomId ->
+                    navController.navigate("chat/$targetRoomId")
                 }
             )
+        }
+
+        // "+" FAB flow: Existing screen -> New chat -> New contact -> Save.
+        composable("newChat") {
+            val newChatViewModel: ContactsViewModel = viewModel()
+            val newChatState by newChatViewModel.uiState.collectAsState()
+
+            NewChatScreen(
+                state = newChatState,
+                viewModel = newChatViewModel,
+                onBack = { navController.popBackStack() },
+                onNewGroup = { navController.navigate("newGroup") },
+                onNewContact = { navController.navigate("newContact") },
+                onNewCommunity = {
+                    // No community-creation backend exists yet: honest placeholder.
+                    android.widget.Toast.makeText(
+                        navController.context,
+                        "Communities are coming soon",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                },
+                onOpenChat = { targetRoomId ->
+                    navController.navigate("chat/$targetRoomId")
+                },
+                onOpenDetails = { row ->
+                    navController.navigate("contactDetails/${Uri.encode(row.key)}")
+                },
+                onRefresh = { newChatViewModel.refresh() }
+            )
+        }
+
+        composable("newContact") {
+            val newContactViewModel: ContactsViewModel = viewModel()
+
+            NewContactScreen(
+                viewModel = newContactViewModel,
+                onBack = { navController.popBackStack() },
+                onSaved = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            "contactDetails/{key}",
+            arguments = listOf(
+                navArgument("key") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { backStackEntry ->
+            val key = backStackEntry.arguments?.getString("key") ?: ""
+            val detailsViewModel: ContactsViewModel = viewModel()
+            val detailsState by detailsViewModel.uiState.collectAsState()
+            val row = detailsState.rows.find { it.key == key }
+            if (row == null) {
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = { Text("Contact details") },
+                            navigationIcon = {
+                                IconButton(onClick = { navController.popBackStack() }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back"
+                                    )
+                                }
+                            }
+                        )
+                    }
+                ) { padding ->
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(padding),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+            } else {
+                ContactDetailsScreen(
+                    row = row,
+                    viewModel = detailsViewModel,
+                    onBack = { navController.popBackStack() },
+                    onOpenChat = { targetRoomId ->
+                        navController.navigate("chat/$targetRoomId")
+                    },
+                    onVoiceCall = { roomId, peer ->
+                        navController.navigate("call/$roomId?audioOnly=true&peerName=${Uri.encode(peer)}")
+                    },
+                    onVideoCall = { roomId, peer ->
+                        navController.navigate("call/$roomId?audioOnly=false&peerName=${Uri.encode(peer)}")
+                    },
+                    onDeleted = { navController.popBackStack() }
+                )
+            }
         }
 
         composable("newGroup") {

@@ -189,7 +189,7 @@ fun CallHistoryContent(
                 .clickable(onClick = onNewCall)
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                Icon(Icons.Default.Phone, contentDescription = "New call", tint = WaBg,
+                Icon(Icons.Default.Phone, contentDescription = "New call", tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.size(26.dp))
                 Box(
                     contentAlignment = Alignment.Center,
@@ -201,7 +201,7 @@ fun CallHistoryContent(
                         .background(WaGreen)
                         .border(2.dp, WaBg, CircleShape)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, tint = WaBg,
+                    Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(14.dp))
                 }
             }

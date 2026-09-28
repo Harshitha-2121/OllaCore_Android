@@ -1,25 +1,36 @@
 package com.ollacore.app.ui.home
 
 import android.text.format.DateUtils
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,6 +38,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -38,7 +52,6 @@ import com.ollacore.app.ui.calls.CallHistoryContent
 import com.ollacore.app.ui.settings.SettingsContent
 import com.ollacore.app.ui.theme.BrandAvatar
 import com.ollacore.app.ui.theme.BrandGradient
-import com.ollacore.app.ui.theme.OllaPrimaryBlue
 import com.ollacore.app.ui.theme.OllacoreLogo
 import com.ollacore.app.ui.updates.UpdatesContent
 import java.time.Instant
@@ -48,14 +61,18 @@ import java.time.format.DateTimeFormatter
 
 private enum class HomeTab { CHATS, UPDATES, COMMUNITIES, CALLS }
 
-/** WhatsApp-reference dark tokens shared by Home tabs (Updates/Communities + nav). */
-internal val WaBg = androidx.compose.ui.graphics.Color(0xFF111B21)
-internal val WaCard = androidx.compose.ui.graphics.Color(0xFF1F2C34)
-internal val WaText = androidx.compose.ui.graphics.Color(0xFFE9EDEF)
-internal val WaSub = androidx.compose.ui.graphics.Color(0xFF8696A0)
-internal val WaGreen = androidx.compose.ui.graphics.Color(0xFF00A884)
-internal val WaPill = androidx.compose.ui.graphics.Color(0xFF0D3B2E)
-internal val WaDivider = androidx.compose.ui.graphics.Color(0xFF222D34)
+/**
+ * WhatsApp-reference layout tokens shared by Home tabs (Updates/Communities +
+ * nav). Theme-derived (NOT hardcoded): identical usage sites render dark in
+ * Dark mode and light in Light mode via MaterialTheme colorScheme.
+ */
+internal val WaBg: Color @Composable get() = MaterialTheme.colorScheme.background
+internal val WaCard: Color @Composable get() = MaterialTheme.colorScheme.surface
+internal val WaText: Color @Composable get() = MaterialTheme.colorScheme.onBackground
+internal val WaSub: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+internal val WaGreen: Color @Composable get() = MaterialTheme.colorScheme.primary
+internal val WaPill: Color @Composable get() = MaterialTheme.colorScheme.primaryContainer
+internal val WaDivider: Color @Composable get() = MaterialTheme.colorScheme.outline
 
 private enum class ChatFilter { ALL, UNREAD, GROUPS, CHANNELS }
 
@@ -90,19 +107,104 @@ fun HomeScreen(
     onNewGroup: () -> Unit = {},
     // Closed/archived chats (3-dot menu; hidden from main list, section below)
     archivedRooms: Set<String> = emptySet(),
+    // WhatsApp-style list multi-selection (long-press rows to enter)
+    selectedIds: Set<String> = emptySet(),
+    pinnedRooms: Set<String> = emptySet(),
+    mutedRooms: Set<String> = emptySet(),
+    onToggleSelect: (String) -> Unit = {},
+    onClearSelection: () -> Unit = {},
+    onSelectAll: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
+    onToggleMute: () -> Unit = {},
+    onToggleArchive: () -> Unit = {},
+    onDeleteSelected: () -> Unit = {},
     // Updates-tab overflow (Settings lives here now that tabs match the reference)
-    onSettings: () -> Unit = {}
+    onSettings: () -> Unit = {},
+    // Reference home-menu parity: communities has no creation backend yet.
+    onNewCommunity: () -> Unit = {}
 ) {
     // Enums are not SaveableStateRegistry-compatible: persist the name, derive the tab.
     var tabName by rememberSaveable { mutableStateOf(HomeTab.CHATS.name) }
     var tab = runCatching { HomeTab.valueOf(tabName) }.getOrElse { HomeTab.CHATS }
     var showMenu by remember { mutableStateOf(false) }
+    // Honest notes for reference-menu entries with no backend (Category 2):
+    // shown as dialogs, never faked.
+    var menuNote by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    // Selection mode lives on the CHATS tab only; anywhere else it clears.
+    val selecting = selectedIds.isNotEmpty() && tab == HomeTab.CHATS
+    var showSelMenu by remember { mutableStateOf(false) }
+    var showDeleteChats by remember { mutableStateOf(false) }
+    BackHandler(enabled = selecting) { onClearSelection() }
+
+    // Pin/mute/archive icons reflect the whole selection (toggle semantics).
+    val allPinned = selecting && selectedIds.all { it in pinnedRooms }
+    val allMuted = selecting && selectedIds.all { it in mutedRooms }
+    val allArchived = selecting && selectedIds.all { it in archivedRooms }
 
     Scaffold(
         containerColor = WaBg,
         topBar = {
             // Updates + Communities + Calls own their in-page headers (reference layout).
             if (tab != HomeTab.UPDATES && tab != HomeTab.COMMUNITIES && tab != HomeTab.CALLS) {
+            if (selecting) {
+                // WhatsApp-style selection toolbar replaces the normal bar
+                // on the SAME screen (no separate route).
+                TopAppBar(
+                    title = {
+                        Text(
+                            selectedIds.size.toString(),
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onClearSelection) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Clear selection"
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = onTogglePin) {
+                            Icon(
+                                Icons.Default.PushPin,
+                                contentDescription = if (allPinned) "Unpin" else "Pin"
+                            )
+                        }
+                        IconButton(onClick = { showDeleteChats = true }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete")
+                        }
+                        IconButton(onClick = onToggleMute) {
+                            Icon(
+                                if (allMuted) Icons.Default.Notifications
+                                else Icons.Default.NotificationsOff,
+                                contentDescription = if (allMuted) "Unmute" else "Mute"
+                            )
+                        }
+                        IconButton(onClick = onToggleArchive) {
+                            Icon(
+                                if (allArchived) Icons.Default.Unarchive else Icons.Default.Archive,
+                                contentDescription = if (allArchived) "Unarchive" else "Archive"
+                            )
+                        }
+                        Box {
+                            IconButton(onClick = { showSelMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "More")
+                            }
+                            DropdownMenu(
+                                expanded = showSelMenu,
+                                onDismissRequest = { showSelMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Select all") },
+                                    onClick = { showSelMenu = false; onSelectAll() }
+                                )
+                            }
+                        }
+                    }
+                )
+            } else {
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -141,19 +243,95 @@ fun HomeScreen(
                                     onClick = { showMenu = false; onNewGroup() }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text("New community") },
+                                    onClick = { showMenu = false; onNewCommunity() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Broadcast lists") },
+                                    onClick = {
+                                        showMenu = false
+                                        menuNote = "Broadcast lists" to
+                                            "One-to-many broadcast messaging needs a backend broadcast API. " +
+                                            "See OLLACORE-BACKEND-SPEC.txt. Nothing here is faked."
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Linked devices") },
                                     onClick = { showMenu = false; onDevices() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Starred") },
+                                    onClick = {
+                                        showMenu = false
+                                        menuNote = "Starred messages" to
+                                            "Starred messages live inside each chat today: long-press any " +
+                                            "message and tap Star. A cross-chat Starred view arrives with the backend."
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Payments") },
+                                    onClick = {
+                                        showMenu = false
+                                        menuNote = "Payments" to
+                                            "In-chat payments need the Ollacore payments service, which does " +
+                                            "not exist yet. See OLLACORE-BACKEND-SPEC.txt."
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Read all") },
+                                    onClick = {
+                                        showMenu = false
+                                        menuNote = "Read all" to
+                                            "Marking every chat read needs a server API. Open each chat to " +
+                                            "send its read receipt - unreads clear as you go."
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Settings") },
+                                    onClick = { showMenu = false; onSettings() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Profile") },
                                     onClick = { showMenu = false; onProfile() }
                                 )
                             }
+                            menuNote?.let { (title, body) ->
+                                AlertDialog(
+                                    onDismissRequest = { menuNote = null },
+                                    title = { Text(title) },
+                                    text = { Text(body) },
+                                    confirmButton = {
+                                        TextButton(onClick = { menuNote = null }) { Text("Got it") }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             )
+            } // end normal toolbar else
             } // end non-Updates/Communities top bar
+            if (showDeleteChats && selecting) {
+                AlertDialog(
+                    onDismissRequest = { showDeleteChats = false },
+                    title = { Text("Delete ${selectedIds.size} chats?") },
+                    text = {
+                        Text(
+                            "Messages in these chats will be cleared on this device " +
+                                "and the chats archived. Server history is unchanged."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showDeleteChats = false
+                            onDeleteSelected()
+                        }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteChats = false }) { Text("Cancel") }
+                    }
+                )
+            }
         },
         floatingActionButton = {
             if (tab == HomeTab.CHATS) {
@@ -179,8 +357,8 @@ fun HomeScreen(
                     com.ollacore.app.data.util.unreadConversationCount(uiState.inbox, archivedRooms)
                 }
                 val itemColors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = androidx.compose.ui.graphics.Color.White,
-                    selectedTextColor = androidx.compose.ui.graphics.Color.White,
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
                     unselectedIconColor = WaSub,
                     unselectedTextColor = WaSub,
                     indicatorColor = WaPill
@@ -192,7 +370,7 @@ fun HomeScreen(
                         BadgedBox(
                             badge = {
                                 if (totalUnread > 0) {
-                                    Badge(containerColor = WaGreen, contentColor = WaBg) {
+                                    Badge(containerColor = WaGreen, contentColor = MaterialTheme.colorScheme.onPrimary) {
                                         Text(if (totalUnread > 99) "99+" else totalUnread.toString())
                                     }
                                 }
@@ -241,6 +419,9 @@ fun HomeScreen(
                     onSearch = onSearch,
                     onRefresh = onRefresh,
                     archivedRooms = archivedRooms,
+                    selectedIds = selectedIds,
+                    pinnedRooms = pinnedRooms,
+                    onToggleSelect = onToggleSelect,
                     modifier = Modifier.fillMaxSize()
                 )
                 HomeTab.UPDATES -> com.ollacore.app.ui.updates.UpdatesContent(
@@ -274,11 +455,24 @@ private fun ChatsContent(
     onSearch: () -> Unit,
     onRefresh: () -> Unit = {},
     archivedRooms: Set<String> = emptySet(),
+    selectedIds: Set<String> = emptySet(),
+    pinnedRooms: Set<String> = emptySet(),
+    onToggleSelect: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Same SaveableStateRegistry rule as tabs: persist the enum name, not the enum.
     var filterName by rememberSaveable { mutableStateOf(ChatFilter.ALL.name) }
     val filter = runCatching { ChatFilter.valueOf(filterName) }.getOrElse { ChatFilter.ALL }
+    val haptics = LocalHapticFeedback.current
+    // Tap toggles while selecting, opens otherwise; long-press always selects.
+    fun onTap(roomId: String) {
+        if (selectedIds.isNotEmpty()) onToggleSelect(roomId)
+        else onConversationClick(roomId)
+    }
+    fun onLongPress(roomId: String) {
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        onToggleSelect(roomId)
+    }
     val (isOnline, wasOffline) = com.ollacore.app.ui.common.rememberConnectivity()
     var archivedOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -289,13 +483,15 @@ private fun ChatsContent(
     val archivedItems = remember(uiState.inbox, archivedRooms) {
         uiState.inbox.filter { it.roomId in archivedRooms }
     }
-    val visible = remember(unarchived, filter) {
-        when (filter) {
+    val visible = remember(unarchived, filter, pinnedRooms) {
+        val base = when (filter) {
             ChatFilter.ALL -> unarchived
             ChatFilter.UNREAD -> unarchived.filter { it.unreadCount > 0 }
             ChatFilter.GROUPS -> unarchived.filter { it.kind.equals("group", ignoreCase = true) }
             ChatFilter.CHANNELS -> emptyList()
         }
+        // Pinned chats float to the top (stable otherwise).
+        base.sortedWith(compareBy({ it.roomId !in pinnedRooms }))
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -410,7 +606,10 @@ private fun ChatsContent(
                     InboxItemRow(
                         item = item,
                         myUserId = uiState.myUserId,
-                        onClick = { onConversationClick(item.roomId) }
+                        isSelected = item.roomId in selectedIds,
+                        isPinned = item.roomId in pinnedRooms,
+                        onClick = { onTap(item.roomId) },
+                        onLongClick = { onLongPress(item.roomId) }
                     )
                 }
                 // Archived section (Close chat target; opening unarchives via caller).
@@ -449,7 +648,10 @@ private fun ChatsContent(
                             InboxItemRow(
                                 item = item,
                                 myUserId = uiState.myUserId,
-                                onClick = { onConversationClick(item.roomId) }
+                                isSelected = item.roomId in selectedIds,
+                                isPinned = item.roomId in pinnedRooms,
+                                onClick = { onTap(item.roomId) },
+                                onLongClick = { onLongPress(item.roomId) }
                             )
                         }
                     }
@@ -459,19 +661,36 @@ private fun ChatsContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun InboxItemRow(item: InboxItem, onClick: () -> Unit, myUserId: String? = null) {
+fun InboxItemRow(
+    item: InboxItem,
+    onClick: () -> Unit,
+    myUserId: String? = null,
+    isSelected: Boolean = false,
+    isPinned: Boolean = false,
+    onLongClick: (() -> Unit)? = null
+) {
     val title = item.name ?: item.peer?.displayName ?: item.peer?.phone ?: "Unknown"
     val isMine = myUserId != null && item.lastMessage?.senderId == myUserId
     val preview = (if (isMine) "You: " else "") + (item.lastMessage?.preview ?: "No messages yet")
+    // Reference highlight: light green in light mode, deep green in dark
+    // mode (derived from the background luminance, so forced themes work).
+    val darkBg = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val selectedBg = if (darkBg) Color(0xFF0B3B2E) else Color(0xFFD9FDD3)
     Card(
-        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 5.dp)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { onLongClick?.invoke() }
+            )
             .testTag("inbox_card"),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) selectedBg else MaterialTheme.colorScheme.surface
+        ),
         elevation = CardDefaults.cardElevation(
             defaultElevation = if (item.unreadCount > 0) 3.dp else 1.dp
         )
@@ -496,7 +715,27 @@ fun InboxItemRow(item: InboxItem, onClick: () -> Unit, myUserId: String? = null)
                 )
             },
             leadingContent = {
-                BrandAvatar(name = title, size = 48.dp)
+                Box(contentAlignment = Alignment.BottomEnd) {
+                    BrandAvatar(name = title, size = 48.dp)
+                    // Reference checkmark over the avatar while selected.
+                    if (isSelected) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF00A884))
+                                .border(2.dp, Color.White, CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                }
             },
             trailingContent = {
                 Column(horizontalAlignment = Alignment.End) {
@@ -524,6 +763,15 @@ fun InboxItemRow(item: InboxItem, onClick: () -> Unit, myUserId: String? = null)
                                 fontWeight = FontWeight.Bold
                             )
                         }
+                    }
+                    if (isPinned) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Icon(
+                            Icons.Default.PushPin,
+                            contentDescription = "Pinned",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

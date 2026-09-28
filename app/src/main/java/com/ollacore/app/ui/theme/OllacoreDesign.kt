@@ -51,6 +51,9 @@ val OllaCardBg = Color(0xFFFFFFFF)
 val OllaBorder = Color(0xFFE2E8F0)
 val ReadBlue = Color(0xFF53BDEB)
 
+/** Seen ticks: pink double-check. */
+val ReadPink = Color(0xFFF06292)
+
 // Back-compat aliases for earlier token names.
 val OllaNavy700 = Color(0xFF1E2A4A)
 val OllaBlue = OllaPrimaryBlue
@@ -64,7 +67,7 @@ val OllaMist = OllaLightBg
 // empty states, call screens, promotional cards. Everywhere else: solids.
 
 val BrandGradient: Brush
-    get() = Brush.linearGradient(listOf(OllaPrimaryBlue, OllaPurple))
+    get() = Brush.linearGradient(listOf(Color(0xFFA855F7), Color(0xFFEC4899)))
 
 val NavyGradient: Brush
     get() = Brush.linearGradient(listOf(OllaNavy700, OllaNavy900))
@@ -83,16 +86,16 @@ val HeroWash: Brush
 
 val SplashGradient: Brush
     get() = Brush.linearGradient(
-        listOf(OllaNavy900, Color(0xFF2B3B8F), OllaPurple)
+        listOf(Color(0xFF1E0716), Color(0xFF6D28D9), Color(0xFFA855F7))
     )
 
-/** Stable solid avatar colors (no gradient - avatars are not a gradient surface). */
+/** Stable solid avatar colors: purple/magenta/plum family (one identity, still distinct per contact). */
 private val AvatarSolids = listOf(
-    OllaPrimaryBlue,
-    OllaPurple,
-    OllaGreen,
-    OllaNavy700,
-    OllaPink
+    Color(0xFFA855F7),
+    Color(0xFFEC4899),
+    Color(0xFF7C3AED),
+    Color(0xFFD946EF),
+    Color(0xFF9333EA)
 )
 
 /** Deterministic solid color per name - stable avatar identity without photos. */

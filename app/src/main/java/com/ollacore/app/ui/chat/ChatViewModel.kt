@@ -116,6 +116,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val e2eeManager = container.e2eeManager
     private val forwardSecrecyManager = container.forwardSecrecyManager
     private val pushConfigManager = container.pushConfigManager
+    private val statusStore = container.messageStatusStore
     private val mlsHandler = MlsMessageHandler()
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -130,6 +131,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val requestToClient = mutableMapOf<String, String>()
     /** client_message_id -> payload kept for Failed -> Retry resend. */
     private val pendingPayloads = mutableMapOf<String, PendingSend>()
+
+    init {
+        // Restore tick states known before a restart; live receipts upgrade
+        // from here, so reopened chats never flash back to single-tick.
+        viewModelScope.launch {
+            val stored = runCatching { statusStore.snapshot() }.getOrElse { emptyMap() }
+            if (stored.isNotEmpty()) {
+                _uiState.update { state ->
+                    val merged = state.messageStatus.toMutableMap()
+                    stored.forEach { (id, rank) ->
+                        val status = MessageStatus.entries.find { it.rank == rank } ?: return@forEach
+                        val cur = merged[id]
+                        if (cur == null || status.rank > cur.rank) merged[id] = status
+                    }
+                    state.copy(messageStatus = merged)
+                }
+            }
+        }
+    }
 
     private data class PendingSend(
         val kind: String,
@@ -287,7 +307,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 upgradeStatus(event.messageId, MessageStatus.DELIVERED)
             }
             is WebSocketEvent.ReceiptRead -> {
-                // Peer opened chat -> Read ✓✓ blue
+                // Peer opened chat -> Read ✓✓ pink
                 setStatus(event.messageId, MessageStatus.READ)
             }
             is WebSocketEvent.MessageUpdated -> {
@@ -480,6 +500,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (lastMsg != null) {
                         chatWebSocket?.markRead(roomId, lastMsg.id)
                     }
+                    // Reconnect/offline catch-up: these messages ARE on this
+                    // device, so acknowledge delivery for recent peer messages.
+                    // Truthful even when the chat isn't opened (delivered != read);
+                    // the server dedupes repeat receipts. Capped to bound traffic.
+                    response.messages
+                        .filter { it.senderId != currentUserId }
+                        .sortedByDescending { it.eventSeq }
+                        .take(20)
+                        .forEach { chatWebSocket?.markDelivered(roomId, it.id) }
                 }
             }
             .onFailure { e ->
@@ -1013,10 +1042,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Monotonic upgrade only: READ > DELIVERED > SENT > SENDING (FAILED only via error path). */
     private fun setStatus(key: String, status: MessageStatus) {
+        var changed = false
         _uiState.update {
             val cur = it.messageStatus[key]
             val next = if (cur == null || status.rank > cur.rank || status == MessageStatus.FAILED || (cur == MessageStatus.FAILED && status == MessageStatus.SENDING)) status else cur
-            if (next == cur) it else it.copy(messageStatus = it.messageStatus + (key to next))
+            if (next == cur) it else {
+                changed = true
+                it.copy(messageStatus = it.messageStatus + (key to next))
+            }
+        }
+        // Persist receipt facts (SENT/DELIVERED/READ only; SENDING/FAILED are
+        // transient) so ticks survive restarts without conflicting live state.
+        if (changed && status.rank in 1..3) {
+            viewModelScope.launch {
+                runCatching { statusStore.upsert(key, status.rank) }
+            }
         }
     }
 

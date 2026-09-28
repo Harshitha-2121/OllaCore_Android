@@ -33,6 +33,7 @@ class ChatPrefsStore(private val context: Context) {
         private val KEY_FAVOURITES = stringPreferencesKey("favourites_json")
         private val KEY_LISTS = stringPreferencesKey("chat_lists_json")
         private val KEY_ARCHIVED = stringPreferencesKey("archived_json")
+        private val KEY_PINNED = stringPreferencesKey("pinned_rooms_json")
         private val KEY_DISAPPEAR = stringPreferencesKey("disappearing_json")
         private val KEY_BLOCKED = stringPreferencesKey("blocked_users_json")
         private val KEY_REPORTS = stringPreferencesKey("reports_json")
@@ -320,6 +321,24 @@ class ChatPrefsStore(private val context: Context) {
             }.getOrElse { emptySet() }.toMutableSet()
             if (archived) current.add(roomId) else current.remove(roomId)
             prefs[KEY_ARCHIVED] = json.encodeToString(listSer, current.toList())
+        }
+    }
+
+    // ── Pinned chats (CLIENT-ONLY; pinned rooms float to the top of home) ──
+
+    val pinnedRooms: Flow<Set<String>> = context.prefsStore.data.map { prefs ->
+        runCatching {
+            prefs[KEY_PINNED]?.let { json.decodeFromString(listSer, it).toSet() } ?: emptySet()
+        }.getOrElse { emptySet() }
+    }
+
+    suspend fun setPinned(roomId: String, pinned: Boolean) {
+        context.prefsStore.edit { prefs ->
+            val current = runCatching {
+                prefs[KEY_PINNED]?.let { json.decodeFromString(listSer, it).toSet() } ?: emptySet()
+            }.getOrElse { emptySet() }.toMutableSet()
+            if (pinned) current.add(roomId) else current.remove(roomId)
+            prefs[KEY_PINNED] = json.encodeToString(listSer, current.toList())
         }
     }
 

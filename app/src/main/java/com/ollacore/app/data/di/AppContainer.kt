@@ -5,6 +5,8 @@ import com.ollacore.app.data.e2ee.E2eeManager
 import com.ollacore.app.data.e2ee.ForwardSecrecyManager
 import com.ollacore.app.data.local.CallLogStore
 import com.ollacore.app.data.local.ChatPrefsStore
+import com.ollacore.app.data.local.LocalContactsStore
+import com.ollacore.app.data.local.MessageStatusStore
 import com.ollacore.app.data.local.SessionStore
 import com.ollacore.app.data.push.PushConfigManager
 import com.ollacore.app.data.remote.OllacoreApi
@@ -17,6 +19,8 @@ class AppContainer(private val context: Context) {
     // CLIENT-ONLY stores (no backend): call history now; archive/mute/pin follow this pattern.
     val callLogStore = CallLogStore(context)
     val chatPrefsStore = ChatPrefsStore(context)
+    val localContactsStore = LocalContactsStore(context)
+    val messageStatusStore = MessageStatusStore(context)
 
     val api = OllacoreApi(
         apiBase = "https://api.ollacore.com/v1",

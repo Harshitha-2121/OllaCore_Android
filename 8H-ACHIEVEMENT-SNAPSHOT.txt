@@ -1,267 +1,239 @@
 OLLACORE ANDROID - 8 HOUR DETAILED ACHIEVEMENT SNAPSHOT
 ==========================================================
-Generated : 2026-09-24 19:12 local (third snapshot; supersedes 2026-09-23 file)
+Generated : 2026-09-26 17:12 local (fourth snapshot; supersedes 2026-09-24 file)
 Project   : Ollacore_android_fixed_v3 / Ollacore / android
 Package   : com.ollacore.app.debug (compileSdk 35, targetSdk 35, minSdk 26)
-Device    : 172.16.70.42:5555 (physical phone; emulator unusable on this host)
+Device    : R9ZL40ET72B (USB; earlier 172.16.70.42:5555 WiFi, then PIN-locked)
 Repo      : https://github.com/Harshitha-2121/OllaCore_Android (main)
 Base URL  : https://api.ollacore.com/v1
-Alice room: 2e71010f-2d19-4d42-8171-a00b10272850
-Accounts  : me a8f85b84-4bfa-4edc-aff9-fca087d7c047 / Alice 23c7f84b-6998-4fc5-b91a-57158c6d6551
 Principle : WhatsApp-style UX on Ollacore-native APIs. Category 1 (API YES) ->
             build UI. Category 2 (API NO) -> backend spec + honest UI, nothing
-            faked. Evidence before claims: every fix verified on device,
-            logcat, and live API forensics.
+            faked. Evidence before claims: build + unit tests + device install.
 
 Build/test (this snapshot)
   ./gradlew :app:assembleDebug :app:testDebugUnitTest --offline   -> GREEN
-  Unit tests: 113 pass / 0 fail / 0 error (8 suites)
-  APK: app/build/outputs/apk/debug/app-debug.apk (69,535,419 bytes,
-       2026-09-24 17:28 local), installed Success on device
-       lastUpdateTime=2026-09-24 12:03:45 device clock
-  Main sources: 73 Kotlin files; tests: 8 Kotlin files
+  Unit tests: 142 pass / 0 fail / 0 error (11 suites: e2ee 45, model 10,
+    util 58, local 4, contacts 21, theme 4)
+  APK: app/build/outputs/apk/debug/app-debug.apk (69,199,949 bytes,
+       2026-09-26 17:04 local), installed Success on R9ZL40ET72B
+  Commits: fb482e8 pushed (113-test baseline); this window's work staged in
+    working tree, NOT yet committed (git status: 15 modified + 9 new files)
 
 ------------------------------------------------
-SECTION 1 - VOICE MESSAGE PLAYBACK (user report -> root cause -> fixed)
+SECTION 1 - CONTACTS FEATURE, COMPLETE (Telegram-style spec, 20 points)
 ------------------------------------------------
-User report: "voice msg are not able to play except voice msg sent at 11:16"
-(and later: "its playing but i cant hear anything").
+Prior state: contacts = inbox peers only (in-memory); Add-by-phone was a
+transient lookup; no add/edit/delete/details, no persistence.
 
-1.1 LIVE API FORENSICS (room token via GET directory/conversations/{id}/token)
-    Fetched 50 history messages. Classified every audio row:
-
-    seq  kind  mime                        filename                     size    attachment link
-    ---- ----- --------------------------- ---------------------------- ------- ------------------------
-    3368 file  audio/mpeg                  silence.mp3                     418   attachments[].id OK
-    3372 file  audio/mpeg                  voice_note.mp3                  418   attachments[].id OK
-    3375 file  audio/mpeg                  voice_note.mp3                  418   attachments[].id OK
-    3379 file  audio/mpeg                  voice_note.mp3                  418   attachments[].id OK
-    3384-3391 file audio/webm;codecs=opus  voice_message_*.webm        101k-390k NONE (no att id)
-    3393 file  audio/mp4                   voice_probe2.m4a            308,830  attachments[].id OK
-    3394 file  audio/mp4                   voice_1790249027804.m4a    195,715  attachments[].id OK
-    3395 file  audio/webm;codecs=opus       voice_message_*.webm        181,124  NONE
-    3396 file  audio/mp4                   voice_1790249680236.m4a    101,757  attachments[].id OK
-    3399 file  audio/webm;codecs=opus       voice_message_*.webm          8,898  NONE
-
-    Download endpoint GET /v1/rooms/{id}/attachments/{aid}/download PROVEN:
-      - works for every linked aid (HTTP 200, content-type application/octet-stream)
-      - returns expires_at ~10 minutes in the future (e.g. 11:46 when called 11:36)
-      - stub.mp3 bytes: FF FB 90 64 then zeros (empty MP3 frame, no audio)
-      - probe.m4a / recent.m4a: valid ftyp M4A + moov (real AAC)
-
-    Message-by-message GET, attachments list routes, and query by message_id:
-      405 / 404 "no such route" - no alternate way to recover Alice webm bytes.
-
-1.2 ROOT CAUSES (four independent defects, all client-side except #4)
-    (a) Stale presigned URL: resolveAttachmentUrl cached download_url forever;
-        after ~10 min MediaPlayer.setDataSource/prepare failed with NO
-        setOnErrorListener -> silent dead tap or stuck spinner. The 11:16
-        m4a played only while its URL was still fresh.
-    (b) Tap with url==null was a no-op (return@FilledIconButton); LaunchedEffect
-        resolved once and never retried on failure.
-    (c) Alice webm rows have NO attachment_ids and NO attachments[] in history
-        -> attachmentId null -> nothing to resolve. Server gap (client cannot
-        invent a download path). UI previously showed a play button that did
-        nothing.
-    (d) 418-byte MP3 stubs "play" as near-silence (user: "playing but i cant
-        hear anything"). Also: Alice body uses duration SECONDS; we only read
-        duration_ms so peer durations showed blank.
-
-1.3 FIXES SHIPPED (code)
-    ChatViewModel.kt
-      - attachmentUrlExpiry map (epoch ms) stored alongside attachmentUrls
-      - resolveAttachmentUrl(auto, force): force drops cache; known-past
-        expiry re-fetches (30s skew); resolvingIds single-flight guard
-      - expires_at parsed via java.time.Instant
-    MainActivity.kt
-      - onForceResolveUrl -> resolveAttachmentUrl(aid, force=true)
-    ChatScreen.kt
-      - onForceResolveUrl threaded ChatScreen -> MessageBubble ->
-        MediaMessageContent -> AudioBubbleContent
-      - voiceDurationMs(body): duration_ms preferred, duration*1000 fallback
-      - AudioBubbleContent rewrite:
-          * isStubAudio (byte_size 1..1024) -> label "Empty audio stub", play disabled
-          * missingAttachment (no aid, no url) -> "Voice message (audio not linked)",
-            play disabled
-          * tap with url==null -> resolve now + autoStartArmed
-          * setAudioAttributes(USAGE_MEDIA, CONTENT_TYPE_SPEECH)
-          * setOnErrorListener -> release, "Can't play this audio",
-            force re-resolve, auto-retry once when new URL arrives
-          * LaunchedEffect(url) auto-starts when armed / preparing
-      - duration display for both our duration_ms and Alice duration seconds
-    Models.kt
-      - fun voiceDurationMs(body): Long?
-    OLLACORE-BACKEND-SPEC.txt
-      - Gap #4: history can omit attachment link on kind=file voice rows
-        (Alice webm) - no client can download; fix server link or add
-        GET messages/{id}/attachments
-      - Gap #5: presigned download URLs ~10 min TTL - document / stable URL
-    Tests
-      - HistoryDecodeTest: peer webm-without-attachments decodes;
-        voiceDurationMs prefers ms then seconds (now 4 tests in suite)
-
-1.4 DEVICE VERIFICATION (172.16.70.42:5555, uiautomator + logcat + dumpsys audio)
-    - Chat opens; labels correct:
-        voice_probe2.m4a | 0:24 | 11:16
-        voice_1790249027804.m4a | 0:15 | 11:24
-        voice_1790249680236.m4a | 0:08 | 11:34
-        "Voice message (audio not linked)" on every Alice webm (11:34, 11:36,
-         09:30-11:01 scroll)
-        "Empty audio stub" on 418-byte voice_note.mp3 (07:39)
-    - Play tap on voice_probe2.m4a:
-        content-desc flips to "Pause audio"
-        MediaHTTPService.makeHTTPConnection (fresh presigned fetch)
-        dumpsys audio: player piid:383 usage=USAGE_MEDIA content=CONTENT_TYPE_SPEECH
-                       sampleRate=44100 channelMask=0x1 event:started
-        AudioTrack timestamps advancing -> RESULT=PLAYING_OK (repeated)
-    - Stub / unlinked bubbles: play button disabled (enabled=false), no silent no-op
-    - Build + full unit suite re-run after final edit: EXIT=0, 113/113
-    - Zero FATAL EXCEPTIONs for the app during this session's playback tests
+1.1  Storage (existing architecture, no Room - DataStore JSON like CallLogStore)
+  NEW data/local/LocalContactsStore.kt: LocalContact(id, firstName, lastName,
+    phone, normalizedPhone, photoUri, resolvedUserId, username, syncToPhone,
+    createdAt, updatedAt); upsert/delete + reactive Flow. JSON defaults keep
+    old installs decoding (tested).
+  NEW data/di/AppContainer.localContactsStore.
+1.2  Pure logic (JVM-tested): ui/contacts/ContactRows.kt - ContactRow model +
+  ContactBook: normalizePhone (+1 (555).. -> +1555.., 00 -> +),
+  isValidPhone (7-15 digits), validateForm (FIRST_REQUIRED / PHONE_REQUIRED /
+  PHONE_INVALID / DUPLICATE + edit exemption), matchesQuery (first/last/full/
+  phone-digits/username, case-insensitive, @-prefix aware), mergeRows (inbox +
+  local; local name/photo/username win; resolved IDs persist), A-Z sort,
+  section keys, fullPhoneNumber (dial + trunk-zero handling).
+  NEW ContactPhoto.kt: picker images copied to filesDir/contact_photos so
+  photos survive restarts.
+1.3  ViewModel rewrite (ContactsViewModel): merged reactive rows, add/update/
+  deleteRow (inbox rows undeletable - server chats untouched), lookupNumber
+  (OnOllacore / NotOnOllacore / Invalid / Failed), openChat (lookup +
+  persist resolvedUserId), offline-tolerant refresh.
+1.4  UI: ContactsScreen rewrite (search always visible, New contact/New group/
+  Add-by-phone actions, A-Z sections, empty states, snackbars, add/edit form
+  dialog with photo picker, delete confirm, lookup-result dialog with Chat /
+  Save contact / Save anyway); NEW ContactDetailsScreen (avatar, name, phone,
+  username, Chat/Voice/Video via resolve-then-navigate, Edit, Delete with
+  "chats are kept" confirm, "Save to contacts" for inbox-only rows).
+1.5  Nav: contactDetails/{key} route added; old contacts route kept working.
+1.6  Tests: ContactRowsTest 21 tests (normalize, validation, duplicates, search,
+  merge, sort, JSON round-trip, legacy decode, dial joining, username).
 
 ------------------------------------------------
-SECTION 2 - CHAT INPUT / HISTORY / MEDIA (earlier in window, still shipped)
+SECTION 2 - "+" BUTTON FLOW (New chat + New contact, reference-driven)
 ------------------------------------------------
-2.1 Keyboard covered composer -> .imePadding() on chat content Column.
-2.2 Own typing echo ignored; roster names for group typing line.
-2.3 OTP paste index-based (full paste fills + auto-submit).
-2.4 Enter-to-send (soft + hardware), Shift+Enter newline; gated by
-    SettingsKeys.ENTER_SEND.
-2.5 Open-at-latest + scroll-top pagination (server pages oldest-first; initial
-    load anchors before_seq=Int.MAX_VALUE).
-2.6 Image upload HTTP 422 fixed: init body uses original_name/declared_mime
-    (server contract), escaping for quotes/backslashes.
-2.7 executeUnit replaces 6 fire-and-forget calls (404/405 no longer fake success).
-2.8 Upload waits for attachment.ready (60s) before message send; 240s ceiling;
-    stage logging tag Upload.
-2.9 History decode crash fixed: AttachmentInfo.id + attachmentRefIds() used
-    everywhere (prefetch, bubble attachmentId, contact media strip).
-2.10 Friendly errors: ErrorMessages.kt (friendlyError/isNetworkError/isAuthError);
-     auth errors offer "Log in again" -> logout + phone route; loading spinner;
-     inline error banner + Dismiss.
-2.11 Quoted reply cards (sender + snippet, tap-to-jump) + "Replying to <name>"
-     composer strip.
-2.12 Mute windows, favourites, lists, archived, disappearing TTL, blocked users,
-     report queue, cleared-before watermark in ChatPrefsStore (SettingsKeys).
+2.1  Home FAB + "New chat" overflow now navigate to NEW newChat route (was
+  old contacts screen).
+2.2  NEW ui/contacts/NewChatScreen.kt: back + "New chat" + 3-dot menu (Invite
+  a friend via system share, Refresh, Help); rounded "Search name, number or
+  @username" field (reuses ContactBook filter, @-aware); New group / New
+  contact (QR affordance -> honest note) / New community (honest "coming
+  soon" toast) options with green circle icons; "Contacts on Ollacore"
+  section (Ollacore branding kept, no WhatsApp marks); avatar + name +
+  circular radio per row; single-select + green check FAB opens the 1-to-1
+  chat; avatar tap -> details (edit/delete preserved).
+2.3  NEW ui/contacts/NewContactScreen.kt: rebuilt pixel-faithful to the
+  provided reference screenshot - back + "New contact" + QR icon app bar with
+  hairline divider; icon-gutter outlined fields (First name w/ person icon,
+  Last name aligned, Username w/ @ icon); Country box ("US +1", floating
+  notched "Country" label, 25-country menu) + Phone box; sync row (icon +
+  "Sync contact to phone" + "Only contacts with a phone number can be
+  synced" + switch OFF default, minus/check thumb); bottom grey Save pill
+  (disabled until first name + valid phone + valid optional username);
+  autofocus removed to match reference; Next/Done keyboard chain +
+  imePadding. Default country changed IN +91 -> US +1 per request (verified
+  in NewContactScreen lines 100/109/259). Saves via addContact into the same
+  DataStore contacts (username + sync flag persisted).
 
 ------------------------------------------------
-SECTION 3 - 3-DOT CHAT MENU (14 items, device-tested)
+SECTION 3 - CHAT PAGE REDESIGN (reference screenshot)
 ------------------------------------------------
-Contact info / Search / Select / Mute (8h, 1wk, Always, Unmute; FCM-enforced) /
-Disappearing (Off, 24h, 7d, 90d) / Favourites / Lists (create, check, badge) /
-Close -> Archived (reopen unarchives) / Send call link (posted + share + preview) /
-New group call (creates group server-side, call connected) / Report (queue) /
-Block+Unblock (local drop + history restore) / Clear (watermark) /
-Delete (group leave 404 "no such route" -> honest inline banner).
-DropdownMenu crash rule: never nest a scrollable inside DropdownMenu content.
-Home: Archived section; archived excluded from counts/badges; markOpened
-respects KEEP_ARCHIVED.
+ChatScreen.kt only; zero behavior/API/navigation change.
+3.1  Bubbles: timestamps + ticks tuck bottom-right of EVERY bubble (was
+  left-aligned row); incoming = theme surface, outgoing = theme primary;
+  18dp radii, 8dp margins kept.
+3.2  Forwarded: in-app forwards arrive as "[Forwarded] .." (ChatViewModel:551);
+  bubbles now render the reference italic "Forwarded" label + arrow and strip
+  the wire prefix (data-driven, no model change).
+3.3  Date pills: white surface pills, grey text, soft shadow.
+3.4  Background: kept the original canvas doodle pattern (no WhatsApp asset);
+  ink retuned to primary-tinted lavender-pink doodles (Section 5).
+3.5  Composer: single rounded pill (emoji + borderless "Message" field +
+  paperclip attach + camera) + solid mic/send circle outside; transparent bar
+  background so pattern shows. Typing callbacks, Enter-to-send, launchers,
+  recorder flow identical. No rupee button (payments unsupported - honest).
+3.6  Header kept (back, avatar, name + typing/online subtitle, video, voice,
+  overflow) - already matched reference order; subtitle preserved as required
+  functionality. Long-press any message selects it (haptic + selection mode).
 
 ------------------------------------------------
-SECTION 4 - TABS + SETTINGS REDESIGN (reference-driven, WhatsApp-dark)
+SECTION 4 - TICK SYSTEM (white single / white double / pink double)
 ------------------------------------------------
-Bottom nav: Chats / Updates / Communities / Calls (near-black bar, dark-green pill).
-Updates: real header + ⋮ (Create channel, Status privacy, Starred, Ad prefs,
-  Settings route); dummy statuses/channels REMOVED (load* return empty; empty
-  states render). Communities: honest dark placeholder. Calls: reference-dark
-  (menu Clear log / Scheduled honest / Settings), Recent list, green FAB,
-  long-press delete. In-page headers (no double header).
-Settings (SettingsRoot.kt, 15 sections) with real hooks:
-  enter-send, keep-archived, auto-download gating, upload quality (JPEG 92/80/65),
-  text scale (root LocalDensity), language, notification tone/vibration/popup,
-  Accounts Centre honest "no connected services".
-Default theme DARK (ThemeStore + MainActivity initial).
-Unread badge: UnreadCounts.kt = distinct conversations with unread>0 (not sum);
-  Home LaunchedEffect refresh; 8 unit tests covering user cases 1-6.
+States were already server-driven; this window closed the loop:
+4.1  Visuals: SENT single tick grey -> white (onPrimary); DELIVERED double
+  grey -> white; READ double blue -> pink #F06292 (centralized ReadPink).
+  Privacy label "blue ticks" -> "pink ticks".
+4.2  Pipeline (verified end-to-end in code): send->ack SENT (receiver offline
+  stays single); peer app auto-sends receipt.delivered on arrival ->
+  DELIVERED; peer opens chat -> receipt.read -> READ. Monotonic rank guard:
+  repeats/out-of-order frames never downgrade or duplicate.
+4.3  NEW data/local/MessageStatusStore.kt: DataStore rank cache (cap 2000),
+  saved on every SENT/DELIVERED/READ change, merged max-rank-wins at startup
+  (pure mergeRanks, unit-tested) - ticks survive restarts, no flash-back.
+  SENDING/FAILED stay transient by design.
+4.4  Reconnect catch-up: history loads now also send markDelivered for the 20
+  most-recent peer messages (plus existing markRead of latest) - the other
+  side's pending single ticks upgrade without refresh. Uniform across
+  text/image/voice/docs (status keyed by message id, shared footer).
+4.5  Boundary (honest): receiver-side SENT->DELIVERED on YOUR screen needs the
+  server to fan out the peer's sync receipts; anything the server emits is
+  applied instantly. Stuck single tick with peer online = server gap, not client.
+4.6  Tests: MessageStatusStoreTest 4 tests (merge ranks, upgrade/no-downgrade
+  sequence, JSON round-trip).
 
 ------------------------------------------------
-SECTION 5 - VOICE RECORDER (send path; playback is Section 1)
+SECTION 5 - LIGHT/DARK + PINK IDENTITY THEME SYSTEM
 ------------------------------------------------
-Runtime RECORD_AUDIO permission flow + rationale dialog.
-Recorder: perm backstop, MediaRecorder(context) API31+, mono 44.1k/128k AAC,
-  cleanupRecorder + onCleared, recordError banner, send-gate file>1024B and
-  duration>500ms, ensureM4aBrand stamping.
-Send as MessageKinds.FILE + audio/mp4 + duration_ms + waveform (server rejects
-  kind=audio with 400; kind=file accepted - proven).
-MimeValidator: m4a->audio/mp4, isSafeContentMismatch (video/mp4 vs audio/mp4
-  for mp4-family), ensureM4aBrand().
-Single PUT sends application/octet-stream (required_headers contract).
+5.1  Foundation already existed (6 M3 schemes, persisted ThemeMode, picker);
+  added the missing forced-LIGHT: ThemeMode.LIGHT, resolveDarkTheme()
+  single source of truth (unit-tested x4: DARK/LIGHT force, SYSTEM + accents
+  follow device), "Light" picker entry, status/nav-bar icon contrast via
+  WindowCompat SideEffect.
+5.2  Pink identity (user direction, no screenshots received - built from the
+  written spec): Light = pastel pink-cream #FBEFF3 bg, white surfaces,
+  deep-plum text, purple #A21CAF primary / magenta secondary / violet
+  tertiary. Dark = near-black plum #150A10, pink-tinted surfaces, lavender
+  #E9A6F5 primary. One family both modes. All accent modes (Blue/Green/
+  Purple/Light/Dark/System) converge on it - legacy accent names kept only
+  for stored-preference compat.
+5.3  Token sweep (same names, now theme-derived - zero layout churn): Wa*
+  (Home/Updates/Calls/Communities), MenuDark* (chat overflow), Nc*
+  (New-contact; light values identical to reference), links primary
+  (was system-based, broke forced modes). Centralized ActionGreen then
+  REMOVED per no-green rule (FAB/mic/Save/switch -> theme primary).
+5.4  Brand tokens: BrandGradient purple->magenta (FAB/logo/onboarding/profile/
+  calls), SplashGradient black-plum->violet->magenta, avatars 5
+  purple-family shades, attachment tiles 6 purple-family shades.
+5.5  Kept (semantic, allowed): call accept-green/decline-red, error reds,
+  missed-call red, pink ticks, white-on-primary glyphs.
+5.6  Tests: ThemeResolutionTest 4 tests.
 
 ------------------------------------------------
-SECTION 6 - SERVER FACTS PROVEN THIS WINDOW
+SECTION 6 - REFERENCE FEATURE PARITY (6 WhatsApp screenshots)
 ------------------------------------------------
-- Session token du_Wlu... is DIRECTORY token; room ops need
-  GET /v1/directory/conversations/{roomId}/token?device_id=... (Bearer session)
-  -> JWT access_token with chat:send/history/attachment:upload/download/rtc:*.
-- History GET /v1/rooms/{id}/messages?before_seq=2147483647&limit=50 works with
-  room JWT; pages oldest-first without before_seq anchor.
-- attachments[].id is the history download key (attachment_ids often empty).
-- Download URL TTL ~10 minutes; re-fetch required after expiry.
-- Alice webm voice: no attachment link in history (spec gap #4).
-- kind=audio -> 400 unsupported; kind=file + audio mime works.
-- Async attachment probe accepts ONLY "M4A " ftyp brand for audio.
-- init allowlist rejects audio/wav; accepts audio/mp4.
-- DELETE rooms/{id}/members/me -> 404 no such route (leave).
-- GET messages/{id} -> 405; attachments listing -> 404.
-- Group create + call connect + call link post + reaction/receipt paths still OK.
+6.1  Home overflow menu now all 8 reference items in order: New chat, New
+  group, New community (toast), Broadcast lists / Starred / Payments /
+  Read all (honest dialogs, never faked), Settings, Profile.
+6.2  Settings rows parity: NEW Lists row (real lists + counts from the local
+  store, or exact creation steps); Subscriptions subtitle + accent dot;
+  Chat-theme subtitle corrected ("Pink theme, Light / Dark / System").
+  Profile header, Payments, Linked devices, Account, Privacy, Chats,
+  Appearance, Broadcasts, Notifications, Storage, Parental, Accessibility,
+  Language, Help, Invite all already present.
+6.3  Backend spec items 7-9 added (broadcast lists, payments service,
+  read-all endpoint) so every honest dialog references a real spec entry.
 
 ------------------------------------------------
-SECTION 7 - VERIFICATION EVIDENCE (cumulative)
+SECTION 7 - CHAT-LIST SELECTION MODE (reference screenshot)
 ------------------------------------------------
-- Builds: assembleDebug green after every change this window (including
-  AudioBubbleContent compile fix: setOnErrorListener { _, _, _ -> } arity
-  and autoStartArmed declaration order).
-- Unit: 113/113 PASS across UnreadCounts(8), MimeValidator(37), LinkUtils(6),
-  ErrorMessages(7), HistoryDecode(4), AttachmentDecode(6), MlsMessageHandler(19),
-  ForwardSecrecyManager(26).
-- Device: installs Success; playback PLAYING_OK with dumpsys audio piid +
-  MediaHTTP + AudioTrack evidence; honest labels for stub/unlinked; menu,
-  tabs, settings, unread badge, error banners previously step-tested.
-- API: room-token exchange, history dump of 50 msgs, download for 4 aids
-  (200 + content-type), hex dumps of stub vs real m4a, failed alternate routes
-  recorded above.
-- APK on device: pid alive (pidof 15622), MainActivity focused after install.
+7.1  NEW pinnedRooms store (ChatPrefsStore, archived-pattern) + HomeViewModel
+  selection state (toggle/select-all/clear; empty set = exited) and bulk
+  actions: pin (toggle, NEW capability), mute toggle (indefinite), archive
+  toggle (archiving exits mode), delete with confirm (local wipe MAX +
+  archive per room, server history untouched - mirrors per-chat Delete).
+7.2  Same-screen toolbar swap: back + live count + Pin / Delete / dynamic
+  Mute / dynamic Archive / overflow (Select all); BackHandler exits;
+  bottom nav untouched; FAB kept (reference-visible).
+7.3  Rows: combinedClickable (tap toggles in mode / opens otherwise),
+  light-green #D9FDD3 highlight (deep-green dark variant via background
+  luminance, so forced themes work), green-check badge over avatar, pin glyph
+  (pinning is now visible), haptic long-press. Archived rows selectable too.
+  Unread badges, timestamps, previews unchanged.
 
 ------------------------------------------------
-SECTION 8 - KEY FILES (this window)
+SECTION 8 - SESSION NOTES / BLOCKERS
 ------------------------------------------------
-Created/modified this window:
-  ui/chat/ChatScreen.kt          AudioBubbleContent rewrite, force-resolve chain,
-                                 voiceDurationMs call site, ime/quote/scroll (prior)
-  ui/chat/ChatViewModel.kt       resolveAttachmentUrl force + expiry map,
-                                 recorder, menu state, history paging (prior)
-  MainActivity.kt                onForceResolveUrl wiring
-  data/model/Models.kt           voiceDurationMs()
-  data/util/MimeValidator.kt     m4a map, mismatch, ensureM4aBrand (prior)
-  data/remote/AttachmentUploader.kt  octet-stream PUT (prior)
-  data/remote/OllacoreApi.kt     init original_name/declared_mime, executeUnit (prior)
-  data/local/ChatPrefsStore.kt   mute/fav/list/archive/TTL/block/report/clear (prior)
-  data/util/UnreadCounts.kt      badge helper (prior)
-  data/util/ErrorMessages.kt     friendly/auth/network (prior)
-  ui/settings/SettingsRoot.kt    15-section settings (prior)
-  ui/updates/UpdatesScreen.kt    dark redesign, dummy data removed (prior)
-  ui/calls/CallHistoryScreen.kt  reference redesign (prior)
-  ui/communities/CommunitiesScreen.kt  honest placeholder (prior)
-  ui/home/HomeScreen.kt + HomeViewModel  archived, unread, keep-archived (prior)
-  ui/chat/ChatOverflowMenu.kt    14-item menu (prior)
-  OLLACORE-BACKEND-SPEC.txt      gaps #4 unlinked voice, #5 URL TTL + prior gaps
-Tests: HistoryDecodeTest (+2 voice cases), AttachmentDecodeTest, UnreadCountsTest,
-  MimeValidatorTest, ErrorMessagesTest, LinkUtilsTest, e2ee suites.
-Reports: 8H-ACHIEVEMENT-SNAPSHOT.txt (this file),
-  PROJECT-FEATURES-PIN-TO-PIN.txt, SESSION-REPORT-8H.txt (older), QA-*.txt.
+- Device was PIN-locked most of the session: installs succeed while locked,
+  but tap-through/screenshot verification needs the phone awake. User disabled
+  the in-app lock ("app privacy") mid-session; splash reached once, then the
+  screen slept again. NOTHING this window is device-verified beyond install.
+- No backend was added or assumed: voice-attachment linkage, URL TTL,
+  communities/channels/broadcasts/payments/read-all/leave-404 gaps are spec'd.
+- Sandbox tenant + OTP sink + FCM/APNs creds still need sir action (carried).
+- ChatViewModel enterSelectionMode + showActions sheet untouched by the
+  message long-press change; UiDeepTest may assert old tap/long-press sheet
+  behavior - full suite green (142/142) so no breakage detected.
 
 ------------------------------------------------
-SECTION 9 - PENDING / NEXT
+SECTION 9 - KEY FILES (this window)
 ------------------------------------------------
-- User confirm: play each remaining m4a on device after this install (probe2
-  already PLAYING_OK twice).
-- Alice historical webm: BLOCKED on server linking attachment ids (spec #4);
-  new sends from this app already link correctly.
-- Backend team: Status, Channels, Communities, polls/events, voice_note/
-  video_note kinds, privacy store, block/report/delete-conversation/leave
-  endpoints, disappearing TTL, backup, QR pairing, attachment link on history
-  voice rows, download URL contract (spec'd with proven responses).
-- Sandbox tenant + OTP sink + SIM_TOKEN/APP_ID + FCM/APNs: need sir action.
-- Optional polish: shared-element transitions, WindowSizeClass, Inter TTF,
-  emulator revival on a capable host.
+NEW: data/local/LocalContactsStore.kt, data/local/MessageStatusStore.kt,
+  ui/contacts/ContactRows.kt, ui/contacts/ContactPhoto.kt,
+  ui/contacts/ContactDetailsScreen.kt, ui/contacts/NewChatScreen.kt,
+  ui/contacts/NewContactScreen.kt,
+  test: ui/contacts/ContactRowsTest.kt, data/local/MessageStatusStoreTest.kt,
+  ui/theme/ThemeResolutionTest.kt.
+MODIFIED: ui/contacts/ContactsViewModel.kt + ContactsScreen.kt (rewrite),
+  MainActivity.kt (newChat/newContact/contactDetails routes, home wiring,
+  status-bar contrast), data/di/AppContainer.kt (2 stores),
+  data/local/ChatPrefsStore.kt (pinnedRooms), data/local/ThemeStore.kt (LIGHT),
+  ui/theme/Theme.kt (pink schemes + resolver), ui/theme/OllacoreDesign.kt
+  (gradients, avatars, accents), ui/chat/ChatScreen.kt (bubbles, footer,
+  composer, doodles, ticks), ui/chat/ChatViewModel.kt (status persist +
+  delivered-ack), ui/chat/ChatOverflowMenu.kt (theme tokens),
+  ui/home/HomeScreen.kt (menu parity, selection) + HomeViewModel.kt
+  (selection/bulk), ui/settings/SettingsRoot.kt + SettingsScreen.kt (rows,
+  LIGHT label), ui/updates/UpdatesScreen.kt, ui/calls/CallHistoryScreen.kt,
+  ui/attachments/AttachmentPicker.kt (purple tiles),
+  ui/privacy/PrivacySecurityScreen.kt (1 word), OLLACORE-BACKEND-SPEC.txt
+  (items 7-9).
+
+------------------------------------------------
+SECTION 10 - PENDING / NEXT
+------------------------------------------------
+- COMMIT this window (15 modified + 9 new files; last push fb482e8 predates it).
+- Device verification pass (needs unlocked phone): + flow, New-contact vs
+  reference, chat restyle, ticks live between two devices, Light/Dark flip,
+  home menu items, list selection mode.
+- Backend team: items 7-9 (broadcasts, payments, read-all) + prior gaps
+  (voice linkage, URL TTL, communities/channels, leave 404, privacy store...).
+- Optional: settings-header search icon (reference has it; needs settings
+  search implementation); picker could drop legacy Blue/Green/Purple labels
+  (all render pink now).
 
 END OF SNAPSHOT

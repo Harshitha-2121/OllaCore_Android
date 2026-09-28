@@ -189,6 +189,7 @@ private fun ThemePickerDialog(onDismiss: () -> Unit) {
                                 com.ollacore.app.data.local.ThemeMode.BLUE -> "Ollacore Blue"
                                 com.ollacore.app.data.local.ThemeMode.GREEN -> "Ollacore Green"
                                 com.ollacore.app.data.local.ThemeMode.PURPLE -> "Purple"
+                                com.ollacore.app.data.local.ThemeMode.LIGHT -> "Light"
                                 com.ollacore.app.data.local.ThemeMode.DARK -> "Dark"
                                 com.ollacore.app.data.local.ThemeMode.SYSTEM -> "System Default"
                             }

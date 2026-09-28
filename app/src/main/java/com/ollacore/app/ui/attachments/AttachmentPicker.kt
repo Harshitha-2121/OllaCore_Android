@@ -46,15 +46,16 @@ fun AttachmentPickerSheet(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
-            // Colorful icon grid (spec 12).
+            // Purple-family icon tiles (one brand identity; white glyphs keep
+            // contrast in both themes).
             AttachmentGrid(
                 options = listOf(
-                    GridOption(Icons.Default.PhotoCamera, "Camera", Color(0xFF5366FF), onCamera),
-                    GridOption(Icons.Default.PhotoLibrary, "Gallery", Color(0xFF8B5CF6), onGallery),
-                    GridOption(Icons.Default.Description, "Document", Color(0xFFF59E0B), onDocument),
-                    GridOption(Icons.Default.AudioFile, "Audio", Color(0xFF10B981), onAudio),
-                    GridOption(Icons.Default.LocationOn, "Location", Color(0xFFEF4444), onLocation),
-                    GridOption(Icons.Default.Person, "Contact", Color(0xFF0EA5E9), onContact)
+                    GridOption(Icons.Default.PhotoCamera, "Camera", Color(0xFFA855F7), onCamera),
+                    GridOption(Icons.Default.PhotoLibrary, "Gallery", Color(0xFFEC4899), onGallery),
+                    GridOption(Icons.Default.Description, "Document", Color(0xFF7C3AED), onDocument),
+                    GridOption(Icons.Default.AudioFile, "Audio", Color(0xFFD946EF), onAudio),
+                    GridOption(Icons.Default.LocationOn, "Location", Color(0xFFC026D3), onLocation),
+                    GridOption(Icons.Default.Person, "Contact", Color(0xFF9333EA), onContact)
                 )
             )
             // Recent media strip (device MediaStore; needs READ_MEDIA_IMAGES grant).

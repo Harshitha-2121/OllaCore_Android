@@ -16,7 +16,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardActions
@@ -39,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -50,7 +50,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,7 +62,7 @@ import com.ollacore.app.data.model.MessageResponse
 import com.ollacore.app.ui.theme.BrandAvatar
 import com.ollacore.app.ui.theme.BubbleRadiusOwn
 import com.ollacore.app.ui.theme.BubbleRadiusPeer
-import com.ollacore.app.ui.theme.OllaPrimaryBlue
+import com.ollacore.app.ui.theme.ReadPink
 import com.ollacore.app.ui.attachments.AttachmentPickerSheet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -520,6 +522,7 @@ fun ChatScreen(
                     val isStarred = message.id in uiState.starredIds
                     val isSelected = message.id in uiState.selectedIds
                     val isDeleted = message.id in uiState.deletedIds
+                    val haptics = LocalHapticFeedback.current
                     // Quoted-reply lookup: resolve reply_to against loaded history so the
                     // bubble shows WHO + WHAT was quoted (not just a "Reply" label).
                     val messagesById = remember(uiState.messages) { uiState.messages.associateBy { it.id } }
@@ -566,7 +569,10 @@ fun ChatScreen(
                         },
                         onLongClick = {
                             if (isDeleted) return@MessageBubble
-                            if (uiState.selectionMode) onToggleSelect(message.id) else showActions = message
+                            // WhatsApp-style: long-press selects the message
+                            // (toggleSelect also enters selection mode).
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleSelect(message.id)
                         }
                     )
                 }
@@ -731,53 +737,80 @@ fun ChatScreen(
                     onTypingStopped()
                 }
             }
+            // Composer — reference layout: one rounded bar holding
+            // Emoji | Text | Attachment | Camera, plus a circular mic/send
+            // button on the right. Bar background stays transparent so the
+            // chat pattern shows through; the pill carries its own surface.
+            // Desktop-style input: Enter sends, Shift+Enter inserts a newline.
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                tonalElevation = 3.dp
+                color = androidx.compose.ui.graphics.Color.Transparent
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    IconButton(onClick = { showEmojiPicker = !showEmojiPicker }) {
-                        Icon(Icons.Default.EmojiEmotions, contentDescription = "Emoji")
-                    }
-                    // "+" -> Camera / Gallery / Document / Audio / Location(API check)
-                    IconButton(onClick = { showAttachmentSheet = true; onPickAttachment() }) {
-                        Icon(Icons.Default.Add, contentDescription = "Attachment")
-                    }
-                    IconButton(onClick = { try { cameraLauncher.launch(null) } catch (_: Exception) { }; onOpenCamera() }) {
-                        Icon(Icons.Default.PhotoCamera, contentDescription = "Camera")
-                    }
-                    OutlinedTextField(
-                        value = messageText,
-                        onValueChange = {
-                            messageText = it
-                            if (it.isNotEmpty()) onTypingStarted() else onTypingStopped()
-                        },
-                        modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
-                            // Hardware keyboards (incl. emulator): plain Enter sends,
-                            // Shift+Enter falls through to the default newline.
-                            // Honors Settings > Chats > Enter key to send.
-                            if (enterToSend && event.key == Key.Enter && event.type == KeyEventType.KeyDown && !event.isShiftPressed) {
-                                sendNow()
-                                true
-                            } else false
-                        },
-                        placeholder = { Text("Type a message…") },
-                        maxLines = 4,
+                    Surface(
                         shape = RoundedCornerShape(28.dp),
-                        // autoCorrectEnabled = false removes Gboard's empty white
-                        // suggestion strip above the keyboard (it can't be hidden
-                        // per-app any other way; tradeoff: no autocorrect here).
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Text,
-                            autoCorrectEnabled = false,
-                            imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default
+                        color = MaterialTheme.colorScheme.surface,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
                         ),
-                        keyboardActions = if (enterToSend) KeyboardActions(onSend = { sendNow() })
-                        else KeyboardActions()
-                    )
+                        shadowElevation = 1.dp,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { showEmojiPicker = !showEmojiPicker }) {
+                                Icon(Icons.Default.EmojiEmotions, contentDescription = "Emoji")
+                            }
+                            OutlinedTextField(
+                                value = messageText,
+                                onValueChange = {
+                                    messageText = it
+                                    if (it.isNotEmpty()) onTypingStarted() else onTypingStopped()
+                                },
+                                modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
+                                    // Hardware keyboards (incl. emulator): plain Enter sends,
+                                    // Shift+Enter falls through to the default newline.
+                                    // Honors Settings > Chats > Enter key to send.
+                                    if (enterToSend && event.key == Key.Enter && event.type == KeyEventType.KeyDown && !event.isShiftPressed) {
+                                        sendNow()
+                                        true
+                                    } else false
+                                },
+                                placeholder = { Text("Message") },
+                                maxLines = 4,
+                                shape = RoundedCornerShape(24.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                    unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                    focusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                                    unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent
+                                ),
+                                // autoCorrectEnabled = false removes Gboard's empty white
+                                // suggestion strip above the keyboard (it can't be hidden
+                                // per-app any other way; tradeoff: no autocorrect here).
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Text,
+                                    autoCorrectEnabled = false,
+                                    imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default
+                                ),
+                                keyboardActions = if (enterToSend) KeyboardActions(onSend = { sendNow() })
+                                else KeyboardActions()
+                            )
+                            // "+" -> Camera / Gallery / Document / Audio / Location(API check)
+                            IconButton(onClick = { showAttachmentSheet = true; onPickAttachment() }) {
+                                Icon(Icons.Default.AttachFile, contentDescription = "Attachment")
+                            }
+                            IconButton(onClick = { try { cameraLauncher.launch(null) } catch (_: Exception) { }; onOpenCamera() }) {
+                                Icon(Icons.Default.PhotoCamera, contentDescription = "Camera")
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.width(8.dp))
                     if (messageText.isNotBlank()) {
                         Box(
@@ -799,8 +832,20 @@ fun ChatScreen(
                         // Spec 13: tap mic to record (no voice_note backend, so it sends
                         // as kind=audio with duration + waveform body fields).
                         // Hidden while recording (VM also guards double-start).
-                        FilledTonalIconButton(onClick = ::onMicTap) {
-                            Icon(Icons.Default.Mic, contentDescription = "Record voice message")
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                                .clickable(onClick = ::onMicTap)
+                        ) {
+                            Icon(
+                                Icons.Default.Mic,
+                                contentDescription = "Record voice message",
+                                tint = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                     }
                 }
@@ -1293,6 +1338,31 @@ fun MessageBubble(
     }
 }
 
+/** Reference-style forwarded header: small arrow + italic label above content. */
+@Composable
+private fun ForwardedLabel(isOwn: Boolean) {
+    val soft = if (isOwn) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f)
+    else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 2.dp)
+    ) {
+        Icon(
+            Icons.AutoMirrored.Filled.Forward,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = soft
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            "Forwarded",
+            style = MaterialTheme.typography.bodySmall,
+            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+            color = soft
+        )
+    }
+}
+
 @Composable
 private fun BubbleFooter(
     message: MessageResponse,
@@ -1305,6 +1375,8 @@ private fun BubbleFooter(
 ) {
     val soft = if (onGradient) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.78f)
     else MaterialTheme.colorScheme.onSurfaceVariant
+    // Reference layout: timestamp + ticks tuck into the bubble's bottom-right
+    // for every message (incoming and outgoing alike).
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp, bottom = 4.dp)) {
         if (message.editedAt != null) {
             Text("(edited)", style = MaterialTheme.typography.labelSmall, color = soft.copy(alpha = 0.65f))
@@ -1318,14 +1390,14 @@ private fun BubbleFooter(
             Icon(Icons.Default.CheckCircle, contentDescription = "Selected", modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.width(6.dp))
         }
+        Spacer(modifier = Modifier.weight(1f))
         // ── Message metadata: time · edited · delivered/read ──
         messageTime(message.createdAt)?.let { stamp ->
             Text(stamp, style = MaterialTheme.typography.labelSmall, color = soft.copy(alpha = 0.8f))
-            Spacer(modifier = Modifier.width(6.dp))
         }
         // ── Message status ticks (own bubbles only; driven by Ollacore ack + receipts) ──
         if (isOwn && status != null) {
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.width(4.dp))
             when (status) {
                 MessageStatus.SENDING -> Icon(
                     Icons.Default.Schedule, contentDescription = "Sending",
@@ -1333,15 +1405,15 @@ private fun BubbleFooter(
                 )
                 MessageStatus.SENT -> Icon(
                     Icons.Default.Check, contentDescription = "Sent",
-                    modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onPrimary
                 )
                 MessageStatus.DELIVERED -> Icon(
                     Icons.Default.DoneAll, contentDescription = "Delivered",
-                    modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimary
                 )
                 MessageStatus.READ -> Icon(
                     Icons.Default.DoneAll, contentDescription = "Read",
-                    modifier = Modifier.size(16.dp), tint = ReadBlue
+                    modifier = Modifier.size(16.dp), tint = ReadPink
                 )
                 MessageStatus.FAILED -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
@@ -1397,10 +1469,18 @@ private fun MediaMessageContent(
 
     val isMedia = attachmentId != null || kind in setOf(MessageKinds.IMAGE, MessageKinds.VIDEO, MessageKinds.AUDIO, MessageKinds.FILE)
     if (!isMedia) {
-        if (caption.isNotEmpty()) {
-            LinkifiedText(caption, modifier = Modifier.padding(4.dp))
+        // Forwarded messages arrive prefixed "[Forwarded] " (see ChatViewModel
+        // forward): render the reference-style Forwarded label and strip the
+        // wire prefix so the bubble shows clean content.
+        val forwarded = caption.startsWith("[Forwarded] ")
+        val displayCaption = if (forwarded) caption.removePrefix("[Forwarded] ") else caption
+        if (forwarded) {
+            ForwardedLabel(isOwn = isOwn)
+        }
+        if (displayCaption.isNotEmpty()) {
+            LinkifiedText(displayCaption, modifier = Modifier.padding(4.dp))
             // Client-side link preview card (no unfurl backend): domain + open.
-            com.ollacore.app.data.util.firstUrl(caption)?.let { url ->
+            com.ollacore.app.data.util.firstUrl(displayCaption)?.let { url ->
                 LinkPreviewCard(url = url)
             }
         } else if (kind != MessageKinds.TEXT) {
@@ -1839,9 +1919,6 @@ private fun LocationBubble(lat: Double?, lng: Double?, label: String, onGradient
     }
 }
 
-/** WhatsApp-style read blue for double ticks. */
-private val ReadBlue = Color(0xFF53BDEB)
-
 private fun formatVoiceTime(ms: Long): String {
     val totalSec = ms / 1000
     return String.format("%d:%02d", totalSec / 60, totalSec % 60)
@@ -1883,7 +1960,9 @@ private fun WaveformBars(
  */
 @Composable
 private fun ChatPatternBackground(modifier: Modifier = Modifier) {
-    val ink = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.07f)
+    // Lavender-pink doodles in both modes: primary carries the brand hue,
+    // so the pattern tracks Light/Dark automatically.
+    val ink = MaterialTheme.colorScheme.primary.copy(alpha = 0.09f)
     androidx.compose.foundation.Canvas(modifier = modifier) {
         val step = 76.dp.toPx()
         val rnd = kotlin.random.Random( ollacoreDoodleSeed )
@@ -1920,7 +1999,7 @@ private fun SystemNoticeChip(text: String, icon: androidx.compose.ui.graphics.ve
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Surface(
             shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+            color = MaterialTheme.colorScheme.surface,
             shadowElevation = 1.dp,
             modifier = Modifier.padding(vertical = 6.dp)
         ) {
@@ -1966,7 +2045,8 @@ private fun dayLabel(day: java.time.LocalDate): String {
 @Composable
 private fun LinkifiedText(text: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val linkColor = if (isSystemInDarkTheme()) Color(0xFF8AB4FF) else Color(0xFF0B57D0)
+    // Theme token (not system-based) so forced Light/Dark modes get the right link color.
+    val linkColor = MaterialTheme.colorScheme.primary
     val annotated = remember(text, linkColor) {
         androidx.compose.ui.text.buildAnnotatedString {
             append(text)

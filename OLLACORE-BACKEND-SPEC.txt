@@ -236,5 +236,18 @@ clear-chat dialog, delete-chat dialog).
    GET    /v1/calls/links/{id} -> { "room_id", "active" }
    Today Android mints call.ollacore.com/<uuid> links, posts them in-chat and
    shares them via system share; resolving a link back into a call needs this.
+7. Broadcast lists (home menu + settings rows, added 2026-09-26):
+   POST   /v1/directory/broadcasts { "name", "member_user_ids": [] }
+   POST   /v1/directory/broadcasts/{id}/send { "body": {...} } (one-to-many
+   fan-out; rendered as normal incoming messages, no shared room).
+   Until then Android shows an honest "needs backend" note. Distinct from
+   Channels (one-way follow model, already spec'd above).
+8. In-chat payments (home menu + settings rows, added 2026-09-26):
+   NEW SERVICE /v1/payments (request/send ledger, UPI-style handle binding,
+   transaction messages with receipt rendering). Nothing client-side is stubbed.
+9. Read all / mark-all-read (home menu, added 2026-09-26):
+   POST   /v1/directory/inbox/read_all -> { "marked": n } (emits receipt.read
+   per room like individual opens do). Until then unreads clear as each chat
+   is opened; Android says so instead of faking it.
 
 END OF SPEC
