@@ -1,0 +1,99 @@
+OLLACORE ANDROID - WORK REPORT TILL 3 PM (2026-09-28)
+=====================================================
+Project : Ollacore_android_fixed_v3 / Ollacore / android
+Package : com.ollacore.app.debug | Repo: Harshitha-2121/OllaCore_Android (main)
+Window  : morning session till ~3:00 PM local
+Status  : build GREEN, 150/150 unit tests pass, commit f54229f pushed to main
+
+------------------------------------------------
+1. VIDEO-CALL ROOT-CAUSE DEBUG + FIX (main task)
+------------------------------------------------
+Problem : caller stuck on "Connecting..." forever; cancelling logged a
+false "Missed Video Call". Instruction: fix root cause, not UI.
+
+ROOT CAUSE #1 (definitive, code-proven): RtcWebSocket.onMessage had NO
+branch for incoming ICE candidates. Both sides SENT candidates
+(onIceCandidate -> sendCandidate worked) but every received candidate frame
+was silently dropped (parser `when` fell through to Unit). Without remote
+candidates ICE can only succeed via same-LAN host candidates; across
+NAT/mobile data the PeerConnection sits in CHECKING forever -> infinite
+"Connecting...".
+
+ROOT CAUSE #2 (definitive): CallViewModel.endCall logged MISSED for
+INCOMING *or* CONNECTING regardless of direction, so a caller cancelling
+while connecting got a false MISSED entry.
+
+ROOT CAUSE #3 (robustness): no connection watchdog, no offer retry (offer
+sent once on socket open; callee joining late never gets it), duplicate
+socket-Connected re-fires offer, socket drop killed even CONNECTED calls.
+
+ROOT CAUSE #4 (permissions): no CAMERA/RECORD_AUDIO runtime request anywhere
+in the call flow; fresh installs deny by default -> startCapture throws.
+
+FIXES SHIPPED:
+- RtcWebSocket.kt (rewritten): pure JVM-testable parseRtcFrame accepting
+  every candidate shape (type/event/cmd + nested/flat fields); new
+  RtcEvent.Candidate; unknown frames logged ([SIGNALING]) instead of
+  silently dropped; outgoing send-queue flushed on socket open; per-frame
+  send/receive logging.
+- CallViewModel.kt: per-call callId (logs + history id, no duplicates);
+  signalingGen stale-event guard; pendingRemoteCandidates queue flushed on
+  setRemoteDescription (fixes SDP/ICE race); offer retry x3 @12s;
+  45s CONNECT watchdog (logs conn/ice/gather states, writes FAILED,
+  cleans up, shows real error - "Connecting..." can no longer hang);
+  history truth table (CONNECTED->COMPLETED, incoming-only->MISSED,
+  outgoing cancel->CANCELLED); declineIncoming->DECLINED (was MISSED);
+  failCall() + abortCall() (permission denial path); releaseCallResources()
+  extracted; Disconnected keeps CONNECTED media alive with a note;
+  full [CALL]/[WEBRTC]/[SDP]/[ICE]/[MEDIA]/[CALL_STATE] logging incl.
+  STUN/TURN counts (credentials never logged).
+- CallLogStore.kt: CallStatus += DECLINED, FAILED (serialization-safe).
+- Verified live pipeline end-to-end in code: ack->SENT, receipt.delivered->
+  DELIVERED, receipt.read->READ, markDelivered on live receive, markRead on
+  open, receiver-side MISSED on CallEnded-while-ringing (all pre-existing).
+- Tests: NEW RtcFrameParseTest (8 tests: answer/offer/candidate shapes,
+  request_id, unknown-frame null, error paths). Suite: 150/150 green.
+
+NOT YET DONE (open): CallHistoryScreen DECLINED/FAILED labels (renders
+blank detail today, no crash); MainActivity runtime permission gate;
+backend-spec candidate-relay item; two-device end-to-end test (needs
+unlocked phones + network variance).
+
+------------------------------------------------
+2. HONEST AUTH-ERROR MAPPING (committed)
+------------------------------------------------
+- isAuthError narrowed: bare "token"/"session"/"forbidden" no longer count
+  as expired session; only 401/unauthorized + explicit expired/invalid
+  phrases. Room-token exchange + HTTP 403 failures now offer Retry.
+- ChatViewModel.apiErrorMessage keeps HTTP status (ApiException.httpStatus)
+  so 401 vs 403/404 stay distinguishable.
+- Tests: room-scoped failures asserted non-auth (ErrorMessagesTest +1).
+
+------------------------------------------------
+3. NULL-BODY HISTORY DECODE FIX (committed)
+------------------------------------------------
+- Server sends "body": null on protocol/system rows; strict Map decode
+  killed whole history load (and misread as expired session).
+- Models.kt: NullAsEmptyJsonObject serializer coerces null -> {}; blank
+  placeholder bubbles render. Covered by HistoryDecodeTest additions.
+
+------------------------------------------------
+4. COMMIT + PUSH
+------------------------------------------------
+- f54229f "WebRTC call fix (ICE RX, watchdog, history truth table),
+  null-body decode fix, honest auth-error mapping (150 tests green)"
+- 6 files, +314/-30, secret-scanned, pushed d16a2e1..f54229f to main.
+  Working tree clean. Prior commits: d16a2e1 (contacts/theme/selection),
+  fb482e8 (113-test baseline).
+
+------------------------------------------------
+5. NOTED / DEFERRED
+------------------------------------------------
+- Pasted auth-test plan (Secs 6-8: email/password, roles) does NOT match
+  this app (OTP phone auth, per-room JWTs, no roles). Offered to adapt it
+  to OTP/session/token-scoping tests or redirect to the right repo.
+  No action taken yet - awaiting user direction.
+- Device R9ZL40ET72B PIN-locked: installs succeed, tap-through verification
+  still pending (user to keep phone awake for the device pass).
+
+END OF REPORT
