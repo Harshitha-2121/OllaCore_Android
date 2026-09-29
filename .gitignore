@@ -33,12 +33,12 @@ WORK-REPORT-*.txt
 SESSION-REPORT-*.txt
 *ACHIEVEMENT-SNAPSHOT.txt
 
-# Local-only QA/spec/report docs (kept on disk, removed from GitHub)
+# Local-only QA/report docs (kept on disk, removed from GitHub).
+# NOTE: OLLACORE-BACKEND-SPEC.txt is tracked - app dialogs reference it.
 ANDROID-QA-REPORT.md
 BuildingAndroidChatapp&TestingReport.txt
 DOCUMENTATION-COVERAGE.md
 OLLACORE-API-REPORT.txt
-OLLACORE-BACKEND-SPEC.txt
 PROJECT-FEATURES-PIN-TO-PIN.txt
 QA_TEST_MATRIX_104.csv
 QA-EXECUTION-REPORT.md
