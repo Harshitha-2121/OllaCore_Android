@@ -64,6 +64,10 @@ import com.ollacore.app.data.model.MessageResponse
 import com.ollacore.app.ui.theme.BrandAvatar
 import com.ollacore.app.ui.theme.BubbleRadiusOwn
 import com.ollacore.app.ui.theme.BubbleRadiusPeer
+import com.ollacore.app.ui.appearance.LocalChatTheme
+import com.ollacore.app.ui.appearance.ChatWallpaperView
+import com.ollacore.app.ui.appearance.rememberChatStyle
+import com.ollacore.app.data.model.bubbleShapes
 import com.ollacore.app.ui.theme.ReadPink
 import com.ollacore.app.ui.attachments.AttachmentPickerSheet
 import kotlinx.coroutines.launch
@@ -354,6 +358,11 @@ fun ChatScreen(
         else -> "offline"
     }
 
+    // Appearance → Chat Theme: live resolved style for bubbles + wallpaper.
+    val chatStyle = rememberChatStyle()
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalChatTheme provides chatStyle
+    ) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -939,6 +948,7 @@ fun ChatScreen(
             }
         }
     }
+    } // CompositionLocalProvider(LocalChatTheme)
 
     // ── "+" sheet: Camera / Gallery / Document / Audio / Location(API check) ──
     if (showAttachmentSheet) {
@@ -1199,14 +1209,22 @@ fun MessageBubble(
     onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {}
 ) {
     val alignment = if (isOwn) Alignment.CenterEnd else Alignment.CenterStart
-    val shape = if (isOwn) BubbleRadiusOwn else BubbleRadiusPeer
+    // Appearance → Chat Theme: bubbles follow the selected theme; outside a
+    // themed subtree (or before it loads) the app scheme is the fallback.
+    val chatTheme = LocalChatTheme.current
+    val shape = chatTheme?.let {
+        val (own, peer) = remember(it.corner) { bubbleShapes(it.corner) }
+        if (isOwn) own else peer
+    } ?: if (isOwn) BubbleRadiusOwn else BubbleRadiusPeer
     // Spec 10 + 31: outgoing = theme primary (adapts to Blue/Green/Purple/Dark);
     // incoming = white/light surface card with hairline border.
-    val peerCard = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
-    else MaterialTheme.colorScheme.surface
-    val main = if (isOwn) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-    val soft = if (isOwn) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f)
-    else MaterialTheme.colorScheme.onSurfaceVariant
+    val peerCard = chatTheme?.incomingBubble
+        ?: if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+        else MaterialTheme.colorScheme.surface
+    val main = chatTheme?.let { if (isOwn) it.outgoingText else it.incomingText }
+        ?: if (isOwn) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    val soft = main.copy(alpha = 0.78f)
+    val ownBg = chatTheme?.outgoingBubble
 
     // Spec 15: group peer messages carry a colored sender label + mini avatar.
     val bubbleBox: @Composable (Modifier) -> Unit = { boxModifier ->
@@ -1214,7 +1232,7 @@ fun MessageBubble(
             modifier = boxModifier
                 .clip(shape)
                 .then(
-                    if (isOwn) Modifier.background(MaterialTheme.colorScheme.primary)
+                    if (isOwn) Modifier.background(ownBg ?: MaterialTheme.colorScheme.primary)
                     else Modifier.background(peerCard)
                 )
                 .then(
@@ -1463,8 +1481,7 @@ private fun ColumnScope.BubbleFooter(
     onRetry: () -> Unit = {},
     onGradient: Boolean = false
 ) {
-    val soft = if (onGradient) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.78f)
-    else MaterialTheme.colorScheme.onSurfaceVariant
+    val soft = bubbleTextColor(isOwn).copy(alpha = 0.8f)
     // Reference layout: timestamp + ticks tuck into the bubble's bottom-right
     // for every message (incoming and outgoing alike). The row WRAPS and aligns
     // end: a weight spacer here would stretch every bubble to max width.
@@ -1500,11 +1517,11 @@ private fun ColumnScope.BubbleFooter(
                 )
                 MessageStatus.SENT -> Icon(
                     Icons.Default.Check, contentDescription = "Sent",
-                    modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onPrimary
+                    modifier = Modifier.size(14.dp), tint = bubbleTextColor(isOwn)
                 )
                 MessageStatus.DELIVERED -> Icon(
                     Icons.Default.DoneAll, contentDescription = "Delivered",
-                    modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimary
+                    modifier = Modifier.size(16.dp), tint = bubbleTextColor(isOwn)
                 )
                 MessageStatus.READ -> Icon(
                     Icons.Default.DoneAll, contentDescription = "Read",
@@ -1795,8 +1812,7 @@ private fun DocumentBubbleContent(
     onGradient: Boolean = false,
     onOpen: (String) -> Unit = {}
 ) {
-    val soft = if (onGradient) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f)
-    else MaterialTheme.colorScheme.onSurfaceVariant
+    val soft = bubbleTextColor(onGradient).copy(alpha = 0.8f)
     Surface(
         // Tap opens the in-app viewer (spec 27); the viewer itself offers external open.
         color = MaterialTheme.colorScheme.surface,
@@ -1838,8 +1854,7 @@ private fun AudioBubbleContent(
     onResolveUrl: (String) -> Unit = {},
     onForceResolveUrl: (String) -> Unit = {}
 ) {
-    val soft = if (onGradient) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f)
-    else MaterialTheme.colorScheme.onSurfaceVariant
+    val soft = bubbleTextColor(onGradient).copy(alpha = 0.8f)
     var isPlaying by remember { mutableStateOf(false) }
     var isPreparing by remember { mutableStateOf(false) }
     var playError by remember { mutableStateOf<String?>(null) }
@@ -1993,8 +2008,7 @@ private fun AudioBubbleContent(
 @Composable
 private fun LocationBubble(lat: Double?, lng: Double?, label: String, onGradient: Boolean = false) {
     val context = LocalContext.current
-    val soft = if (onGradient) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f)
-    else MaterialTheme.colorScheme.onSurfaceVariant
+    val soft = bubbleTextColor(onGradient).copy(alpha = 0.8f)
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(12.dp)) {
         Column(modifier = Modifier.padding(10.dp).widthIn(max = 250.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2052,41 +2066,32 @@ private fun WaveformBars(
  * WhatsApp-style doodle background (spec 10): deterministic scattered glyphs
  * (rings, plus marks, arcs, rounded squares) at very low alpha over dots.
  * Pure Canvas, no assets, theme-aware, zero backend involved.
+ *
+ * Appearance → Chat Theme: renders the selected wallpaper; the default
+ * theme's doodle derives from the app scheme (same look as before).
  */
 @Composable
 private fun ChatPatternBackground(modifier: Modifier = Modifier) {
-    // Lavender-pink doodles in both modes: primary carries the brand hue,
-    // so the pattern tracks Light/Dark automatically.
-    val ink = MaterialTheme.colorScheme.primary.copy(alpha = 0.09f)
-    androidx.compose.foundation.Canvas(modifier = modifier) {
-        val step = 76.dp.toPx()
-        val rnd = kotlin.random.Random( ollacoreDoodleSeed )
-        var row = 0
-        var y = step / 2
-        while (y < size.height) {
-            var x = step / 2 + (if (row % 2 == 1) step / 2 else 0f)
-            while (x < size.width) {
-                when (rnd.nextInt(5)) {
-                    0 -> drawCircle(ink, radius = 5.dp.toPx(), center = androidx.compose.ui.geometry.Offset(x, y), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.4.dp.toPx()))
-                    1 -> {
-                        val h = 7.dp.toPx()
-                        drawLine(ink, androidx.compose.ui.geometry.Offset(x - h, y), androidx.compose.ui.geometry.Offset(x + h, y), strokeWidth = 1.4.dp.toPx())
-                        drawLine(ink, androidx.compose.ui.geometry.Offset(x, y - h), androidx.compose.ui.geometry.Offset(x, y + h), strokeWidth = 1.4.dp.toPx())
-                    }
-                    2 -> drawArc(ink, 20f, 260f, false, topLeft = androidx.compose.ui.geometry.Offset(x - 6.dp.toPx(), y - 6.dp.toPx()), size = androidx.compose.ui.geometry.Size(12.dp.toPx(), 12.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.4.dp.toPx()))
-                    3 -> drawRoundRect(ink, topLeft = androidx.compose.ui.geometry.Offset(x - 5.dp.toPx(), y - 5.dp.toPx()), size = androidx.compose.ui.geometry.Size(10.dp.toPx(), 10.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx(), 3.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.4.dp.toPx()))
-                    else -> drawCircle(ink, radius = 1.6.dp.toPx(), center = androidx.compose.ui.geometry.Offset(x, y))
-                }
-                x += step + rnd.nextInt(-8, 9).dp.toPx()
-                y += rnd.nextInt(-6, 7).dp.toPx().coerceIn(-size.height, size.height)
-            }
-            y = (row + 1) * step + step / 2
-            row++
-        }
-    }
+    val wallpaper = LocalChatTheme.current?.wallpaper
+        ?: com.ollacore.app.data.model.ChatWallpaper.Doodle()
+    ChatWallpaperView(wallpaper = wallpaper, modifier = modifier)
 }
 
-private const val ollacoreDoodleSeed = 20260922
+/**
+ * Bubble content (text) color: theme-resolved when a chat theme is active,
+ * otherwise the historical scheme colors. Keeps ticks, timestamps and media
+ * controls readable on custom bubble colors.
+ */
+@Composable
+private fun bubbleTextColor(isOwn: Boolean): androidx.compose.ui.graphics.Color {
+    val t = LocalChatTheme.current
+    return when {
+        t != null && isOwn -> t.outgoingText
+        t != null -> t.incomingText
+        isOwn -> MaterialTheme.colorScheme.onPrimary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+}
 
 /** Centered system chip: encryption notice + day separators. */
 @Composable

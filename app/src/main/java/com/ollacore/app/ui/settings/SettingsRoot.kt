@@ -94,6 +94,10 @@ fun SettingsRoot(
             "language" -> LanguageScreen(modifier = Modifier.padding(padding))
             "accessibility" -> AccessibilityScreen(modifier = Modifier.padding(padding))
             "notifications_adv" -> NotificationSoundScreen(modifier = Modifier.padding(padding))
+            "appearance" -> com.ollacore.app.ui.appearance.AppearanceFlow(
+                onBack = { screen = "root" },
+                modifier = Modifier.padding(padding)
+            )
             "help" -> HelpScreen(
                 topic = screenArg,
                 title = screenTitle,
@@ -422,6 +426,8 @@ private fun SettingsHome(
 
         // ── 5. Appearance ──
         SectionLabel("Appearance")
+        NavRow(Icons.Default.Palette, "Appearance", "Chat themes, bubbles, wallpaper, app icon",
+            onClick = { onOpen("appearance", "Appearance", "") })
         NavRow(Icons.Default.Palette, "Chat theme", "Pink theme, Light / Dark / System",
             onClick = { showTheme = true })
         NavRow(Icons.Default.Apps, "App icon", "Default icon",
