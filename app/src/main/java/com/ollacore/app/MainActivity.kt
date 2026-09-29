@@ -346,10 +346,14 @@ fun OllacoreNavHost() {
         }
 
         composable(
-            "chat/{roomId}",
-            arguments = listOf(navArgument("roomId") { type = NavType.StringType })
+            "chat/{roomId}?scrollTo={scrollTo}",
+            arguments = listOf(
+                navArgument("roomId") { type = NavType.StringType },
+                navArgument("scrollTo") { type = NavType.StringType; defaultValue = "" }
+            )
         ) { backStackEntry ->
             val roomId = backStackEntry.arguments?.getString("roomId") ?: return@composable
+            val scrollTo = backStackEntry.arguments?.getString("scrollTo")?.ifBlank { null }
             val chatViewModel: ChatViewModel = viewModel()
             val chatState by chatViewModel.uiState.collectAsState()
             val menuState by chatViewModel.menuState.collectAsState()
@@ -384,6 +388,7 @@ fun OllacoreNavHost() {
             ChatScreen(
                 uiState = chatState,
                 roomId = roomId,
+                initialScrollToMessageId = scrollTo,
                 onBack = { navController.popBackStack() },
                 onSendMessage = { text ->
                     chatViewModel.sendMessage(text)
@@ -839,6 +844,69 @@ fun OllacoreNavHost() {
                 onToggleMute = { checked -> infoViewModel.setMuted(roomId, checked) },
                 onRename = { name -> infoViewModel.setAlias(roomId, name) },
                 onBackToChat = { navController.popBackStack() },
+                onOpenImage = { url ->
+                    navController.navigate("imageViewer?url=${Uri.encode(url)}")
+                },
+                onOpenDocument = { url, name, mime ->
+                    navController.navigate(
+                        "doc?url=${Uri.encode(url)}&name=${Uri.encode(name)}&mime=${Uri.encode(mime)}"
+                    )
+                },
+                onOpenMediaBrowser = { navController.navigate("media/$roomId") },
+                onOpenStarred = { navController.navigate("starred/$roomId") },
+                onOpenGroup = { groupId -> navController.navigate("chat/$groupId") },
+                onToggleFavourite = { infoViewModel.toggleFavourite() },
+                onCreateList = { name, done -> infoViewModel.createChatList(name, done) },
+                onToggleListMember = { name, member -> infoViewModel.setRoomInList(name, member) },
+                onClearChat = { done -> infoViewModel.clearChat(done) },
+                onToggleBlock = { infoViewModel.toggleBlock() },
+                onSubmitReport = { reason, done -> infoViewModel.submitReport(reason, done) },
+                onDeleteChat = { done ->
+                    infoViewModel.deleteChat { ok ->
+                        done(ok)
+                        if (ok) navController.navigate("home") { popUpTo(0) }
+                    }
+                },
+                onClearOpError = { infoViewModel.clearOpError() }
+            )
+        }
+
+        composable(
+            "starred/{roomId}",
+            arguments = listOf(navArgument("roomId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val roomId = backStackEntry.arguments?.getString("roomId") ?: return@composable
+            val starredViewModel: com.ollacore.app.ui.chat.StarredMessagesViewModel = viewModel()
+            val starredState by starredViewModel.uiState.collectAsState()
+
+            LaunchedEffect(roomId) {
+                starredViewModel.load(roomId)
+            }
+
+            com.ollacore.app.ui.chat.StarredMessagesScreen(
+                uiState = starredState,
+                onBack = { navController.popBackStack() },
+                onOpenMessage = { messageId ->
+                    navController.navigate("chat/$roomId?scrollTo=$messageId")
+                }
+            )
+        }
+
+        composable(
+            "media/{roomId}",
+            arguments = listOf(navArgument("roomId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val roomId = backStackEntry.arguments?.getString("roomId") ?: return@composable
+            val mediaViewModel: com.ollacore.app.ui.contact.MediaBrowserViewModel = viewModel()
+            val mediaState by mediaViewModel.uiState.collectAsState()
+
+            LaunchedEffect(roomId) {
+                mediaViewModel.load(roomId)
+            }
+
+            com.ollacore.app.ui.contact.MediaBrowserScreen(
+                uiState = mediaState,
+                onBack = { navController.popBackStack() },
                 onOpenImage = { url ->
                     navController.navigate("imageViewer?url=${Uri.encode(url)}")
                 },

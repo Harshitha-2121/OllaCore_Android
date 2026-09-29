@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -155,7 +156,8 @@ fun BrandAvatar(
     modifier: Modifier = Modifier,
     size: Dp = 44.dp,
     showPresence: Boolean = false,
-    isOnline: Boolean = false
+    isOnline: Boolean = false,
+    labelStyle: TextStyle = MaterialTheme.typography.titleMedium
 ) {
     Box(modifier = modifier.size(size)) {
         Box(
@@ -168,7 +170,7 @@ fun BrandAvatar(
             Text(
                 initialsFor(name),
                 color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
+                style = labelStyle,
                 fontWeight = FontWeight.Bold
             )
         }

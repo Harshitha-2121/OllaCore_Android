@@ -151,7 +151,9 @@ fun ChatScreen(
     onReport: (String) -> Unit = {},
     onToggleBlock: () -> Unit = {},
     onClearChat: () -> Unit = {},
-    onDeleteChat: () -> Unit = {}
+    onDeleteChat: () -> Unit = {},
+    // ── Starred-browser entry: jump once to this message when present ──
+    initialScrollToMessageId: String? = null
 ) {
     // Draft survives rotation (String is saveable; rotation test covers this).
     var messageText by rememberSaveable { mutableStateOf("") }
@@ -218,6 +220,19 @@ fun ChatScreen(
         if (isInitial || atBottom || isOwn) {
             if (isInitial) listState.scrollToItem(msgs.size - 1)
             else listState.animateScrollToItem(msgs.size - 1)
+        }
+    }
+    // Deep-link entry (starred browser): jump once to the target message
+    // as soon as history contains it; never fights the follow logic after.
+    var scrollTargetConsumed by remember(roomId, initialScrollToMessageId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(uiState.messages.size, initialScrollToMessageId) {
+        val target = initialScrollToMessageId
+        if (!target.isNullOrBlank() && scrollTargetConsumed != target) {
+            val idx = uiState.messages.indexOfFirst { it.id == target }
+            if (idx >= 0) {
+                scrollTargetConsumed = target
+                listState.scrollToItem(idx)
+            }
         }
     }
     val context = LocalContext.current
