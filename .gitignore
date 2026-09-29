@@ -26,3 +26,9 @@ Thumbs.db
 *.hprof
 captures/
 compile_out.txt
+
+# Debug dumps + local work reports (never commit - bloat)
+ollacore_*.txt
+WORK-REPORT-*.txt
+SESSION-REPORT-*.txt
+*ACHIEVEMENT-SNAPSHOT.txt
