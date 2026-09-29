@@ -172,6 +172,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Local menu enforcement must be in place BEFORE history lands.
             blockedCache = runCatching { container.chatPrefsStore.blockedUsers.first() }.getOrElse { emptySet() }
             clearedBeforeSeq = runCatching { container.chatPrefsStore.getClearedBefore(roomId) }.getOrNull()
+            // Legacy blocks (stored before timestamps existed) get stamped now:
+            // their history instants predate the stamp, so old messages stay
+            // visible and only newer arrivals hide.
+            blockedCache.filter { id ->
+                runCatching { container.chatPrefsStore.getBlockedAt(id) }.getOrNull() == null
+            }.forEach { id ->
+                runCatching { container.chatPrefsStore.setUserBlocked(id, true) }
+            }
+            blockedAtCache = runCatching { container.chatPrefsStore.blockedAt.first() }.getOrElse { emptyMap() }
             // Delete-for-me hides + delete-for-everyone tombstones restore BEFORE
             // history lands, so reopened chats never flash removed content.
             hiddenForMeCache = runCatching { container.chatPrefsStore.getHiddenForMe(roomId) }.getOrElse { emptySet() }.toMutableSet()
@@ -292,9 +301,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // Local enforcement: blocked senders + cleared watermarks + delete-for-me never reach the list.
+                // Local enforcement: blocked senders (post-block messages only) +
+                // cleared watermarks + delete-for-me never reach the list.
                 val cut = clearedBeforeSeq
-                if (msg.senderId in blockedCache || (cut != null && msg.eventSeq <= cut) || msg.id in hiddenForMeCache) return
+                if (isBlockedMessage(msg.senderId, msg.createdAt) || (cut != null && msg.eventSeq <= cut) || msg.id in hiddenForMeCache) return
                 // Own-message echo: server stored it -> at least Sent ✓ (ack may arrive separately)
                 if (msg.senderId == currentUserId && msg.clientMessageId != null) {
                     setStatus(msg.clientMessageId, MessageStatus.SENT)
@@ -685,6 +695,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // Local enforcement caches (block + clear watermarks + delete-for-me apply to live + history).
     private var blockedCache: Set<String> = emptySet()
+    private var blockedAtCache: Map<String, Long> = emptyMap()
     private var clearedBeforeSeq: Int? = null
     private var hiddenForMeCache: MutableSet<String> = mutableSetOf()
 
@@ -736,6 +747,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             blockedCache = runCatching {
                 prefs.blockedUsers.first()
             }.getOrElse { emptySet() }
+            blockedAtCache = runCatching {
+                prefs.blockedAt.first()
+            }.getOrElse { emptyMap() }
             clearedBeforeSeq = runCatching { prefs.getClearedBefore(roomId) }.getOrNull()
             _menuState.value = ChatMenuState(
                 isFavourite = runCatching {
@@ -765,9 +779,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun applyLocalViewFilter(msgs: List<MessageResponse>): List<MessageResponse> {
         val cut = clearedBeforeSeq
         return msgs.filter { m ->
-            (cut == null || m.eventSeq > cut) && m.senderId !in blockedCache && m.id !in hiddenForMeCache
+            (cut == null || m.eventSeq > cut) && !isBlockedMessage(m.senderId, m.createdAt) && m.id !in hiddenForMeCache
         }
     }
+
+    /**
+     * Timestamp-aware block check for one message: hidden ONLY when the sender
+     * is currently blocked AND the message was created at/after the block
+     * event. Pre-block history always passes.
+     */
+    private fun isBlockedMessage(senderId: String, createdAt: String?): Boolean =
+        blockedMessageHidden(
+            senderBlocked = senderId in blockedCache,
+            blockedAtMs = blockedAtCache[senderId],
+            createdAtMs = messageCreatedAtMs(createdAt)
+        )
 
     fun toggleFavourite() {
         viewModelScope.launch {
@@ -801,16 +827,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val nowBlocked = ids.any { it in blockedCache }
         viewModelScope.launch {
             ids.forEach { runCatching { container.chatPrefsStore.setUserBlocked(it, !nowBlocked) } }
-            // Update the cache synchronously (same scope/thread): refreshMenuState()
-            // reloads it in a sibling coroutine, which previously raced the filter.
+            // Update the caches synchronously (same scope/thread): refreshMenuState()
+            // reloads them in a sibling coroutine, which previously raced the filter.
             blockedCache = if (nowBlocked) blockedCache - ids else blockedCache + ids
+            blockedAtCache = runCatching { container.chatPrefsStore.blockedAt.first() }.getOrElse { emptyMap() }
             refreshMenuState()
             if (nowBlocked) {
                 // Unblocked: reload history so messages hidden while blocked return
                 // (server history is untouched by local block).
                 _uiState.value.roomToken?.let { loadMessages(it) }
             } else {
-                // Blocked: drop their bubbles from the visible list immediately.
+                // Blocked: re-filter WITHOUT dropping history (only post-block
+                // arrivals hide); the chat must not suddenly lose old messages.
                 _uiState.update { it.copy(messages = applyLocalViewFilter(it.messages)) }
             }
         }

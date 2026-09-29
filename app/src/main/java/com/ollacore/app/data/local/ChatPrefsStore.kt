@@ -38,6 +38,7 @@ class ChatPrefsStore(private val context: Context) {
         private val KEY_PINNED = stringPreferencesKey("pinned_rooms_json")
         private val KEY_DISAPPEAR = stringPreferencesKey("disappearing_json")
         private val KEY_BLOCKED = stringPreferencesKey("blocked_users_json")
+        private val KEY_BLOCKED_AT = stringPreferencesKey("blocked_at_json")
         private val KEY_REPORTS = stringPreferencesKey("reports_json")
         private val KEY_CLEARED = stringPreferencesKey("cleared_before_json")
         private val KEY_CUSTOM = stringPreferencesKey("custom_settings_json")
@@ -409,7 +410,8 @@ class ChatPrefsStore(private val context: Context) {
     }
 
     // ── Blocked user ids (CLIENT-ONLY enforcement until the server block list
-    //   lands: incoming messages from blocked senders are dropped locally) ──
+    //   lands: only messages created AT/AFTER the block event are dropped, so
+    //   pre-block history stays visible) ──
 
     val blockedUsers: Flow<Set<String>> = context.prefsStore.data.map { prefs ->
         runCatching {
@@ -417,14 +419,41 @@ class ChatPrefsStore(private val context: Context) {
         }.getOrElse { emptySet() }
     }
 
+    /** userId -> block-event epoch ms (device clock at tap time; compared
+     * against SERVER message instants, which share the NTP universe). */
+    val blockedAt: Flow<Map<String, Long>> = context.prefsStore.data.map { prefs ->
+        runCatching {
+            prefs[KEY_BLOCKED_AT]?.let { json.decodeFromString(mapLongSer, it) } ?: emptyMap()
+        }.getOrElse { emptyMap() }
+    }
+
+    suspend fun getBlockedAt(userId: String): Long? =
+        runCatching {
+            context.prefsStore.data.map { prefs ->
+                prefs[KEY_BLOCKED_AT]?.let { json.decodeFromString(mapLongSer, it)[userId] }
+            }.first()
+        }.getOrNull()
+
     suspend fun setUserBlocked(userId: String, blocked: Boolean) {
         if (userId.isBlank()) return
         context.prefsStore.edit { prefs ->
             val current = runCatching {
                 prefs[KEY_BLOCKED]?.let { json.decodeFromString(listSer, it).toSet() } ?: emptySet()
             }.getOrElse { emptySet() }.toMutableSet()
-            if (blocked) current.add(userId) else current.remove(userId)
+            val at = runCatching {
+                prefs[KEY_BLOCKED_AT]?.let { json.decodeFromString(mapLongSer, it).toMutableMap() } ?: mutableMapOf()
+            }.getOrElse { mutableMapOf() }
+            if (blocked) {
+                current.add(userId)
+                // Re-block overwrites: each block period gets its own cutoff,
+                // so unblock/block cycles classify correctly.
+                at[userId] = System.currentTimeMillis()
+            } else {
+                current.remove(userId)
+                at.remove(userId)
+            }
             prefs[KEY_BLOCKED] = json.encodeToString(listSer, current.toList())
+            prefs[KEY_BLOCKED_AT] = json.encodeToString(mapLongSer, at)
         }
     }
 
