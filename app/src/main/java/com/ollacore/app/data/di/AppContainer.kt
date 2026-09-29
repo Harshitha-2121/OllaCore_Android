@@ -5,6 +5,7 @@ import com.ollacore.app.data.e2ee.E2eeManager
 import com.ollacore.app.data.e2ee.ForwardSecrecyManager
 import com.ollacore.app.data.local.CallLogStore
 import com.ollacore.app.data.local.ChatPrefsStore
+import com.ollacore.app.data.local.GroupEventStore
 import com.ollacore.app.data.local.LocalContactsStore
 import com.ollacore.app.data.local.MessageStatusStore
 import com.ollacore.app.data.local.SessionStore
@@ -20,6 +21,7 @@ class AppContainer(private val context: Context) {
     val callLogStore = CallLogStore(context)
     val chatPrefsStore = ChatPrefsStore(context)
     val localContactsStore = LocalContactsStore(context)
+    val groupEventStore = GroupEventStore(context)
     val messageStatusStore = MessageStatusStore(context)
 
     val api = OllacoreApi(

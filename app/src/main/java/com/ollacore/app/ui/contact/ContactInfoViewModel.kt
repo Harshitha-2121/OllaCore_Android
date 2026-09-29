@@ -139,62 +139,24 @@ class ContactInfoViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
         _uiState.update { it.copy(roomToken = roomToken) }
-        val messages = runCatching {
-            withContext(Dispatchers.IO) {
-                chatRepo.listMessages(roomToken, roomId, limit = 100).getOrThrow().messages
-            }
-        }.getOrElse {
-            _uiState.update { s -> s.copy(error = it.message) }
+        // Shared sweep (data/util/SharedMediaScan): identical counts/thumbs
+        // as before, now reused by Group Info.
+        val scan = runCatching {
+            com.ollacore.app.data.util.scanSharedMedia(chatRepo, roomToken, roomId)
+        }.getOrElse { e ->
+            _uiState.update { s -> s.copy(error = e.message) }
             return
-        }
-        var links = 0
-        var docs = 0
-        val media = messages.filter {
-            com.ollacore.app.data.model.attachmentRefIds(it).isNotEmpty()
-        }
-        messages.forEach { msg ->
-            val text = try {
-                msg.body["text"]?.jsonPrimitive?.content ?: ""
-            } catch (_: Exception) {
-                ""
-            }
-            val lower = text.lowercase()
-            if ("http://" in lower || "https://" in lower || "www." in lower) links++
-        }
-        docs = media.count {
-            val k = it.kind.lowercase()
-            k == "file" || k == "document" || (try {
-                it.body["mime"]?.jsonPrimitive?.content ?: ""
-            } catch (_: Exception) {
-                ""
-            }).startsWith("application/")
-        }
-        // Thumbnails: resolve at most 6 download URLs (best-effort each).
-        val thumbs = withContext(Dispatchers.IO) {
-            media.take(12).mapNotNull { msg ->
-                val aid = com.ollacore.app.data.model.attachmentRefIds(msg).firstOrNull()
-                    ?: return@mapNotNull null
-                val mime = try {
-                    msg.body["mime"]?.jsonPrimitive?.content
-                } catch (_: Exception) {
-                    null
-                }
-                val name = try {
-                    msg.body["filename"]?.jsonPrimitive?.content
-                        ?: msg.body["text"]?.jsonPrimitive?.content
-                } catch (_: Exception) {
-                    null
-                }
-                val url = runCatching {
-                    chatRepo.downloadAttachment(roomToken, roomId, aid).getOrThrow().downloadUrl
-                }.getOrNull()
-                val duration = com.ollacore.app.data.model.voiceDurationMs(msg.body)
-                SharedThumb(aid, msg.kind, mime, name, url, duration)
-            }.take(6)
         }
         if (watchedRoom == roomId) {
             _uiState.update {
-                it.copy(mediaCount = media.size, linkCount = links, docCount = docs, thumbs = thumbs)
+                it.copy(
+                    mediaCount = scan.mediaCount,
+                    linkCount = scan.linkCount,
+                    docCount = scan.docCount,
+                    thumbs = scan.thumbs.map { t ->
+                        SharedThumb(t.attachmentId, t.kind, t.mime, t.filename, t.downloadUrl, t.durationMs)
+                    }
+                )
             }
         }
     }

@@ -692,9 +692,22 @@ fun OllacoreNavHost() {
             }
         }
 
-        composable("newGroup") {
+        composable(
+            "newGroup?seed={seed}",
+            arguments = listOf(
+                navArgument("seed") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { backStackEntry ->
             val newGroupViewModel: NewGroupViewModel = viewModel()
             val newGroupState by newGroupViewModel.uiState.collectAsState()
+            val seed = backStackEntry.arguments?.getString("seed") ?: ""
+
+            // Similar-group entry: preselect the seed roster once per visit.
+            LaunchedEffect(seed) {
+                if (seed.isNotBlank()) {
+                    newGroupViewModel.prefill(seed.split(","))
+                }
+            }
 
             // Created -> open the new group chat (Category 1 - create group API YES)
             LaunchedEffect(newGroupState.createdRoomId) {
@@ -937,12 +950,12 @@ fun OllacoreNavHost() {
                 onRename = groupInfoViewModel::rename,
                 onDescription = groupInfoViewModel::setDescription,
                 onIcon = groupInfoViewModel::setIcon,
-                onAddMember = groupInfoViewModel::addMember,
                 onRemoveMember = groupInfoViewModel::removeMember,
                 onSetAdmin = groupInfoViewModel::setAdmin,
                 onInvite = groupInfoViewModel::createInvite,
                 onLeave = groupInfoViewModel::leaveGroup,
                 onClearTransient = groupInfoViewModel::clearTransient,
+                onIconFile = { file -> groupInfoViewModel.setIconFile(file, "image/jpeg") },
                 onVoiceCall = {
                     val peer = Uri.encode(groupInfoState.name.ifBlank { "Group" })
                     navController.navigate("call/$roomId?audioOnly=true&peerName=$peer")
@@ -957,6 +970,32 @@ fun OllacoreNavHost() {
                     }
                 },
                 onToggleMute = { groupInfoViewModel.toggleMute() },
+                onOpenMediaBrowser = { navController.navigate("media/$roomId") },
+                onOpenMedia = { url, mime, name ->
+                    if (mime.startsWith("image/")) {
+                        navController.navigate("imageViewer?url=${Uri.encode(url)}")
+                    } else {
+                        navController.navigate(
+                            "doc?url=${Uri.encode(url)}&name=${Uri.encode(name)}&mime=${Uri.encode(mime)}"
+                        )
+                    }
+                },
+                onOpenChat = { navController.navigate("chat/$roomId") },
+                onOpenStarredChat = { messageId ->
+                    navController.navigate("chat/$roomId?scrollTo=$messageId")
+                },
+                onPrivacy = { navController.navigate("privacy") },
+                onSimilarGroup = { memberIds, _ ->
+                    navController.navigate("newGroup?seed=${Uri.encode(memberIds)}")
+                },
+                onToggleFavourite = { groupInfoViewModel.toggleFavourite() },
+                onSetRoomList = { name, member -> groupInfoViewModel.setRoomList(name, member) },
+                onClearChat = { groupInfoViewModel.clearChat() },
+                onReport = { reason -> groupInfoViewModel.reportGroup(reason) },
+                onAddQuery = { groupInfoViewModel.setAddQuery(it) },
+                onToggleAddSelect = { groupInfoViewModel.toggleAddSelect(it) },
+                onConfirmAdd = { groupInfoViewModel.confirmAddMembers() },
+                onConsumeAddDone = { groupInfoViewModel.consumeAddDone() },
                 onLeft = {
                     navController.navigate("home") { popUpTo(0) }
                 }

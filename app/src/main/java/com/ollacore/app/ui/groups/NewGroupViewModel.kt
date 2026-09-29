@@ -75,6 +75,22 @@ class NewGroupViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * Similar-group entry: preselect an existing roster on the SELECT step.
+     * The user still reviews, renames and confirms - nothing auto-creates.
+     */
+    fun prefill(memberIds: Collection<String>) {
+        val ids = memberIds.filter { it.isNotBlank() }.toSet()
+        if (ids.isEmpty()) return
+        _uiState.update {
+            it.copy(
+                selectedIds = it.selectedIds + ids,
+                step = NewGroupStep.SELECT_MEMBERS,
+                error = null
+            )
+        }
+    }
+
     fun goDetails() {
         if (_uiState.value.selectedIds.isEmpty()) {
             _uiState.update { it.copy(error = "Select at least one member") }
