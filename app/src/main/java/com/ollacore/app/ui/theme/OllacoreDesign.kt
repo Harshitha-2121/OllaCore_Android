@@ -29,38 +29,36 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Ollacore premium design tokens (additive - no existing API touched).
- * Direction: clean white surfaces, dark navy/blue accents, green comms
- * accents, blue/purple gradient highlights, selective glass, big radii.
+ * Direction: WhatsApp-Web palette - near-black teal background, gray-blue
+ * panels, teal-green primary, blue links/ticks, white text.
  */
 
-// ── Official Ollacore brand palette ───────────────────────────────────
-// "Connect. Chat. Share." - deep navy, royal blue, electric blue,
-// soft purple, teal/green, white, very light blue/gray backgrounds.
+// ── Ollacore brand palette (teal-green family) ────────────────────────
+// "Connect. Chat. Share." - teal-green primary (#00A884), deep-teal
+// light-mode primary (#008069), near-black teal backgrounds (#0B141A),
+// gray-blue surfaces (#111B21 / #202C33), blue accents (#53BDEB).
 
-val OllaPrimaryBlue = Color(0xFF5366FF)
-val OllaPurple = Color(0xFF8B5CF6)
-val OllaPink = Color(0xFFEC4899)
-val OllaGreen = Color(0xFF10B981)
-val OllaCallGreen = Color(0xFF22C55E)
+val OllaPrimaryBlue = Color(0xFF008069)
+val OllaPurple = Color(0xFF027EB5)
+val OllaPink = Color(0xFF00A884)
+val OllaGreen = Color(0xFF00A884)
+val OllaCallGreen = Color(0xFF25D366)
 val OllaDanger = Color(0xFFEF4444)
-val OllaNavy900 = Color(0xFF0F172A)
-val OllaDarkSurface = Color(0xFF111827)
+val OllaNavy900 = Color(0xFF0B141A)
+val OllaDarkSurface = Color(0xFF111B21)
 val OllaMediumText = Color(0xFF334155)
-val OllaSecondaryText = Color(0xFF64748B)
-val OllaLightBg = Color(0xFFF8FAFC)
+val OllaSecondaryText = Color(0xFF667781)
+val OllaLightBg = Color(0xFFF0F2F5)
 val OllaCardBg = Color(0xFFFFFFFF)
-val OllaBorder = Color(0xFFE2E8F0)
+val OllaBorder = Color(0xFFE9EDEF)
 val ReadBlue = Color(0xFF53BDEB)
 
-/** Seen ticks: pink double-check. */
-val ReadPink = Color(0xFFF06292)
-
 // Back-compat aliases for earlier token names.
-val OllaNavy700 = Color(0xFF1E2A4A)
+val OllaNavy700 = Color(0xFF202C33)
 val OllaBlue = OllaPrimaryBlue
-val OllaSky = Color(0xFF7D8DFF)
+val OllaSky = Color(0xFF53BDEB)
 val OllaViolet = OllaPurple
-val OllaGreenBright = Color(0xFF34D399)
+val OllaGreenBright = Color(0xFF25D366)
 val OllaMist = OllaLightBg
 
 // ── Gradients: RESTRICTED surfaces only ───────────────────────────────
@@ -68,7 +66,7 @@ val OllaMist = OllaLightBg
 // empty states, call screens, promotional cards. Everywhere else: solids.
 
 val BrandGradient: Brush
-    get() = Brush.linearGradient(listOf(Color(0xFFA855F7), Color(0xFFEC4899)))
+    get() = Brush.linearGradient(listOf(Color(0xFF008069), Color(0xFF00A884)))
 
 val NavyGradient: Brush
     get() = Brush.linearGradient(listOf(OllaNavy700, OllaNavy900))
@@ -87,16 +85,16 @@ val HeroWash: Brush
 
 val SplashGradient: Brush
     get() = Brush.linearGradient(
-        listOf(Color(0xFF1E0716), Color(0xFF6D28D9), Color(0xFFA855F7))
+        listOf(Color(0xFF041414), Color(0xFF005C4B), Color(0xFF00A884))
     )
 
-/** Stable solid avatar colors: purple/magenta/plum family (one identity, still distinct per contact). */
+/** Stable solid avatar colors: teal/green/blue family (one identity, still distinct per contact). */
 private val AvatarSolids = listOf(
-    Color(0xFFA855F7),
-    Color(0xFFEC4899),
-    Color(0xFF7C3AED),
-    Color(0xFFD946EF),
-    Color(0xFF9333EA)
+    Color(0xFF008069),
+    Color(0xFF00A884),
+    Color(0xFF027EB5),
+    Color(0xFF25D366),
+    Color(0xFF0D9488)
 )
 
 /** Deterministic solid color per name - stable avatar identity without photos. */
@@ -291,9 +289,9 @@ val PillRadius = RoundedCornerShape(28.dp)
  */
 val OwnBubbleLight: Brush
     get() = Brush.linearGradient(
-        listOf(Color(0xFFD4F2DC), Color(0xFFDCE7FD))
+        listOf(Color(0xFFD9FDD3), Color(0xFFCFF5DF))
     )
 val OwnBubbleDark: Brush
     get() = Brush.linearGradient(
-        listOf(Color(0xFF144A36), Color(0xFF22345E))
+        listOf(Color(0xFF005C4B), Color(0xFF00795F))
     )

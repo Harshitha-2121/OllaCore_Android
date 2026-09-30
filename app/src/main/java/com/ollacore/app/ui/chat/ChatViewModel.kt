@@ -325,7 +325,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 upgradeStatus(event.messageId, MessageStatus.DELIVERED)
             }
             is WebSocketEvent.ReceiptRead -> {
-                // Peer opened chat -> Read ✓✓ pink
+                // Peer opened chat -> Read tick becomes blue
                 setStatus(event.messageId, MessageStatus.READ)
             }
             is WebSocketEvent.MessageUpdated -> {

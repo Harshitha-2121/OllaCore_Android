@@ -46,16 +46,16 @@ fun AttachmentPickerSheet(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
-            // Purple-family icon tiles (one brand identity; white glyphs keep
-            // contrast in both themes).
+            // Teal/green/blue icon tiles (one brand identity; white glyphs
+            // keep contrast in both themes).
             AttachmentGrid(
                 options = listOf(
-                    GridOption(Icons.Default.PhotoCamera, "Camera", Color(0xFFA855F7), onCamera),
-                    GridOption(Icons.Default.PhotoLibrary, "Gallery", Color(0xFFEC4899), onGallery),
-                    GridOption(Icons.Default.Description, "Document", Color(0xFF7C3AED), onDocument),
-                    GridOption(Icons.Default.AudioFile, "Audio", Color(0xFFD946EF), onAudio),
-                    GridOption(Icons.Default.LocationOn, "Location", Color(0xFFC026D3), onLocation),
-                    GridOption(Icons.Default.Person, "Contact", Color(0xFF9333EA), onContact)
+                    GridOption(Icons.Default.PhotoCamera, "Camera", Color(0xFF00A884), onCamera),
+                    GridOption(Icons.Default.PhotoLibrary, "Gallery", Color(0xFF027EB5), onGallery),
+                    GridOption(Icons.Default.Description, "Document", Color(0xFF53BDEB), onDocument),
+                    GridOption(Icons.Default.AudioFile, "Audio", Color(0xFF25D366), onAudio),
+                    GridOption(Icons.Default.LocationOn, "Location", Color(0xFFF15C6D), onLocation),
+                    GridOption(Icons.Default.Person, "Contact", Color(0xFF0D9488), onContact)
                 )
             )
             // Recent media strip (device MediaStore; needs READ_MEDIA_IMAGES grant).

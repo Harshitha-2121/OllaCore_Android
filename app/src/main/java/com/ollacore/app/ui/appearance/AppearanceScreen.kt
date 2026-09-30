@@ -209,14 +209,14 @@ fun AppearanceScreen(
     }
 }
 
-/** Representative dot color per app theme mode. */
+/** Representative dot color per app theme mode (teal-green identity family). */
 fun appModeColor(mode: ThemeMode): Color = when (mode) {
-    ThemeMode.BLUE -> Color(0xFF3B82F6)
-    ThemeMode.GREEN -> Color(0xFF10B981)
-    ThemeMode.PURPLE -> Color(0xFF7C5CFF)
-    ThemeMode.LIGHT -> Color(0xFFE5E7EB)
-    ThemeMode.DARK -> Color(0xFF1F2937)
-    ThemeMode.SYSTEM -> Color(0xFF6B7280)
+    ThemeMode.BLUE -> Color(0xFF027EB5)
+    ThemeMode.GREEN -> Color(0xFF00A884)
+    ThemeMode.PURPLE -> Color(0xFF0D9488)
+    ThemeMode.LIGHT -> Color(0xFFF0F2F5)
+    ThemeMode.DARK -> Color(0xFF0B141A)
+    ThemeMode.SYSTEM -> Color(0xFF667781)
 }
 
 /** Live launcher icon preview (reflects the currently enabled icon). */

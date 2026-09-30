@@ -114,7 +114,7 @@ fun PrivacySecurityScreen(
                 "Last seen & online" to "Who sees your activity",
                 "Profile photo" to "Who sees your photo",
                 "About" to "Who sees your about text",
-                "Read receipts" to "Send pink ticks",
+                "Read receipts" to "Send blue ticks",
                 "Blocked contacts" to "Manage blocked users",
                 "Disappearing messages" to "Needs server TTL to sync"
             ).forEach { (title, sub) ->

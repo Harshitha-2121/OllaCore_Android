@@ -8,60 +8,64 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import com.ollacore.app.data.local.ThemeMode
 
-// Ollacore pink identity. Dynamic wallpaper tinting stays OFF so the
-// Ollacore identity holds on every device.
+// Ollacore teal-green identity (WhatsApp-Web reference). Dynamic wallpaper
+// tinting stays OFF so the identity holds on every device.
 //
-// Light: pastel pink/cream background (#FBEFF3), white surfaces, deep-plum
-// text, purple/magenta primary. Dark: near-black warm plum background,
-// pink-tinted surfaces, light lavender primary. One primary family in both
-// modes - never blue/green/orange outside semantic (success/warning/error)
-// states.
+// Dark: near-black teal background (#0B141A), panel surfaces (#111B21),
+// elevated surfaces (#202C33), hover/selection (#2A3942), teal-green
+// primary (#00A884), light secondary text (#8696A0), blue links/ticks
+// (#53BDEB). Light: gray panel background (#F0F2F5), white surfaces,
+// deep-teal primary (#008069), green-tinted containers (#D9FDD3).
 private val LightBrandScheme = lightColorScheme(
-    primary = Color(0xFFA21CAF),
+    primary = Color(0xFF008069),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFF5D0FE),
-    onPrimaryContainer = Color(0xFF4A044E),
-    secondary = Color(0xFFEC4899),
+    primaryContainer = Color(0xFFD9FDD3),
+    onPrimaryContainer = Color(0xFF0B3B2E),
+    secondary = Color(0xFF00796B),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFFCE7F3),
-    onSecondaryContainer = Color(0xFF831843),
-    tertiary = Color(0xFF7C3AED),
+    secondaryContainer = Color(0xFFF0F2F5),
+    onSecondaryContainer = Color(0xFF111B21),
+    tertiary = Color(0xFF027EB5),
     onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFEDE9FE),
-    onTertiaryContainer = Color(0xFF3B1470),
-    background = Color(0xFFFBEFF3),
-    onBackground = Color(0xFF4A2530),
+    tertiaryContainer = Color(0xFFE3F2FA),
+    onTertiaryContainer = Color(0xFF023B5C),
+    background = Color(0xFFF0F2F5),
+    onBackground = Color(0xFF111B21),
     surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF4A2530),
-    surfaceVariant = Color(0xFFF6E3EA),
-    onSurfaceVariant = Color(0xFF8A6570),
-    outline = Color(0xFFE7C6D2),
-    error = Color(0xFFEF4444),
-    onError = Color.White
+    onSurface = Color(0xFF111B21),
+    surfaceVariant = Color(0xFFF0F2F5),
+    onSurfaceVariant = Color(0xFF667781),
+    outline = Color(0xFFDDE3E8),
+    error = Color(0xFFD32F2F),
+    onError = Color.White,
+    errorContainer = Color(0xFFFDECEC),
+    onErrorContainer = Color(0xFF8C1D18)
 )
 
 private val DarkBrandScheme = darkColorScheme(
-    primary = Color(0xFFE9A6F5),
-    onPrimary = Color(0xFF3B0A2E),
-    primaryContainer = Color(0xFF5C1A4E),
-    onPrimaryContainer = Color(0xFFFBDDF5),
-    secondary = Color(0xFFF472B6),
-    onSecondary = Color(0xFF3B0A1E),
-    secondaryContainer = Color(0xFF5C1A34),
-    onSecondaryContainer = Color(0xFFFBDDF0),
-    tertiary = Color(0xFFC4B5FD),
-    onTertiary = Color(0xFF2E1065),
-    tertiaryContainer = Color(0xFF4C1D95),
-    onTertiaryContainer = Color(0xFFEDE9FE),
-    background = Color(0xFF150A10),
-    onBackground = Color(0xFFF9EDEF),
-    surface = Color(0xFF211016),
-    onSurface = Color(0xFFF9EDEF),
-    surfaceVariant = Color(0xFF2F1A23),
-    onSurfaceVariant = Color(0xFFC998A8),
-    outline = Color(0xFF4A2B37),
-    error = Color(0xFFF87171),
-    onError = Color(0xFF450A0A)
+    primary = Color(0xFF00A884),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFF0B3B2E),
+    onPrimaryContainer = Color(0xFFD9FDD3),
+    secondary = Color(0xFF25D366),
+    onSecondary = Color(0xFF041414),
+    secondaryContainer = Color(0xFF202C33),
+    onSecondaryContainer = Color(0xFFE9EDEF),
+    tertiary = Color(0xFF53BDEB),
+    onTertiary = Color(0xFF0B1414),
+    tertiaryContainer = Color(0xFF0F2E3A),
+    onTertiaryContainer = Color(0xFFBFE7FA),
+    background = Color(0xFF0B141A),
+    onBackground = Color(0xFFE9EDEF),
+    surface = Color(0xFF111B21),
+    onSurface = Color(0xFFE9EDEF),
+    surfaceVariant = Color(0xFF202C33),
+    onSurfaceVariant = Color(0xFF8696A0),
+    outline = Color(0xFF2A3942),
+    error = Color(0xFFF15C6D),
+    onError = Color.White,
+    errorContainer = Color(0xFF3E1D20),
+    onErrorContainer = Color(0xFFFFDAD6)
 )
 
 /**
@@ -86,7 +90,7 @@ fun OllacoreTheme(
     // system (spec 31: Dark + Light + System Default).
     val effectiveDark = resolveDarkTheme(themeMode, darkTheme)
 
-    // One brand identity: every accent mode renders the pink/purple family
+    // One brand identity: every accent mode renders the teal-green family
     // (legacy Blue/Green/Purple choices converge here); only the
     // light/dark tuning differs.
     val colorScheme = if (effectiveDark) DarkBrandScheme else LightBrandScheme

@@ -44,10 +44,10 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /** Dark popup tokens (reference look: near-black cards in both app themes). */
-private val PopupCard = Color(0xFF1C1C1E)
+private val PopupCard = Color(0xFF202C33)
 private val PopupText = Color.White
 private val PopupSubtle = Color.White.copy(alpha = 0.12f)
-private val PopupDanger = Color(0xFFFF8A9E)
+private val PopupDanger = Color(0xFFF15C6D)
 
 /** Top-level menu entries in reference order. */
 enum class MenuActionId { REPLY, FORWARD, COPY, INFO, STAR, DELETE, MORE }

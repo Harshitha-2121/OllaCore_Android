@@ -358,7 +358,7 @@ private fun AiCard(cardW: Dp, onClick: () -> Unit) {
             .clip(RoundedCornerShape(20.dp))
             .background(
                 androidx.compose.ui.graphics.Brush.linearGradient(
-                    listOf(Color(0xFF2B1B4E), Color(0xFF4C1D95), Color(0xFF1E3A8A))
+                    listOf(Color(0xFF0B3B2E), Color(0xFF045D4A), Color(0xFF043A3A))
                 )
             )
             .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(20.dp))

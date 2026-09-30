@@ -68,7 +68,7 @@ import com.ollacore.app.ui.appearance.LocalChatTheme
 import com.ollacore.app.ui.appearance.ChatWallpaperView
 import com.ollacore.app.ui.appearance.rememberChatStyle
 import com.ollacore.app.data.model.bubbleShapes
-import com.ollacore.app.ui.theme.ReadPink
+import com.ollacore.app.ui.theme.ReadBlue
 import com.ollacore.app.ui.attachments.AttachmentPickerSheet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1411,7 +1411,7 @@ fun tombstoneText(isOwn: Boolean): String =
 
 /**
  * Delete confirmation matching the reference: dark rounded card, title up
- * top, full-width pill buttons (pink "Delete for everyone", green
+ * top, full-width pill buttons (red "Delete for everyone", green
  * "Delete for me"), borderless green "Cancel". The everyone-option only
  * renders for own messages (server enforces sender-only).
  */
@@ -1445,7 +1445,7 @@ private fun DeleteMessageDialog(
                     ) {
                         Text(
                             "Delete for everyone",
-                            color = ReadPink,
+                            color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(vertical = 6.dp)
                         )
                     }
@@ -1525,7 +1525,7 @@ private fun ColumnScope.BubbleFooter(
                 )
                 MessageStatus.READ -> Icon(
                     Icons.Default.DoneAll, contentDescription = "Read",
-                    modifier = Modifier.size(16.dp), tint = ReadPink
+                    modifier = Modifier.size(16.dp), tint = ReadBlue
                 )
                 MessageStatus.FAILED -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(

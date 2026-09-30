@@ -428,7 +428,7 @@ private fun SettingsHome(
         SectionLabel("Appearance")
         NavRow(Icons.Default.Palette, "Appearance", "Chat themes, bubbles, wallpaper, app icon",
             onClick = { onOpen("appearance", "Appearance", "") })
-        NavRow(Icons.Default.Palette, "Chat theme", "Pink theme, Light / Dark / System",
+        NavRow(Icons.Default.Palette, "Chat theme", "Green theme, Light / Dark / System",
             onClick = { showTheme = true })
         NavRow(Icons.Default.Apps, "App icon", "Default icon",
             onClick = {
