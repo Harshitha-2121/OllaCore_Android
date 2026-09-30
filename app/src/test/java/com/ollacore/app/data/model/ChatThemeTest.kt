@@ -76,6 +76,23 @@ class ChatThemeTest {
     }
 
     @Test
+    fun `default follows app dark-light mode`() {
+        assertEquals(ChatThemes.default, ChatThemes.defaultFor(true))
+        val light = ChatThemes.defaultFor(false)
+        assertEquals("default_light", light.id)
+        // Light default: white incoming bubbles with dark text, same
+        // scheme-aware Doodle wallpaper and brand-green outgoing.
+        assertEquals(Color.White, light.incomingBubble)
+        assertEquals(Color(0xFF1F2C34), light.incomingText)
+        assertEquals(ChatThemes.default.outgoingBubble, light.outgoingBubble)
+        assertEquals(ChatThemes.default.wallpaper, light.wallpaper)
+        assertTrue(ChatThemes.isDefaultId("default_dark"))
+        assertTrue(ChatThemes.isDefaultId("default_light"))
+        assertFalse(ChatThemes.isDefaultId("pastel_purple"))
+        assertFalse(ChatThemes.isDefaultId(null))
+    }
+
+    @Test
     fun `ai generator is deterministic and theme-shaped`() {
         val a = PromptHashGenerator.generate("calm ocean evening")
         val b = PromptHashGenerator.generate("calm ocean evening")

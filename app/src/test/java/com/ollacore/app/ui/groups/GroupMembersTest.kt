@@ -40,6 +40,31 @@ class GroupMembersTest {
     }
 
     @Test
+    fun `self admin by id with admin role`() {
+        assertTrue(isSelfAdmin(all, "u-ad", "+1999"))
+        assertTrue(isSelfAdmin(all, "u-me", "+1000").not())
+    }
+
+    @Test
+    fun `self admin accepts owner creator roles and phone fallback`() {
+        val owner = Participant("u-ox", "owner", "Puri", "+1001")
+        assertTrue(isSelfAdmin(listOf(owner), "u-ox", null))
+        val creator = Participant("u-cx", "Creator", "Puri", "+1001")
+        assertTrue(isSelfAdmin(listOf(creator), "u-cx", null))
+        // Principal id format skew: match by session phone instead.
+        val phoneOnly = Participant("da_other", "admin", "Puri", "+1000")
+        assertTrue(isSelfAdmin(listOf(phoneOnly), "u-me", "+1000"))
+    }
+
+    @Test
+    fun `null role or plain member is never self admin`() {
+        assertFalse(isSelfAdmin(all, "u-me", "+1000"))
+        assertFalse(isSelfAdmin(all, "u-an", "+1003"))
+        assertFalse(isSelfAdmin(all, null, null))
+        assertFalse(isSelfAdmin(emptyList(), "u-me", "+1000"))
+    }
+
+    @Test
     fun `group events survive json round-trip`() {
         val json = Json { ignoreUnknownKeys = true }
         val ser = ListSerializer(GroupEvent.serializer())

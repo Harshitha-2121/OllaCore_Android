@@ -61,9 +61,15 @@ fun ChatThemeScreen(
     var showAi by remember { mutableStateOf(false) }
 
     // Column-major fill puts even indices on the top row: AI lands
-    // top-row second, right after the selected default card.
-    val items: List<GridItem> = remember {
-        val t = ChatThemes.all
+    // top-row second, right after the selected default card. The Default
+    // card previews adaptively (defaultFor(appDark)) but keeps its stored
+    // id, so selection + persistence are unaffected.
+    val appDark = LocalAppDark.current
+    val items: List<GridItem> = remember(appDark) {
+        val t = ChatThemes.all.map { theme ->
+            if (ChatThemes.isDefaultId(theme.id)) ChatThemes.defaultFor(appDark).copy(id = theme.id)
+            else theme
+        }
         listOf(GridItem.Theme(t[0]), GridItem.Theme(t[1]), GridItem.Ai) +
             t.drop(2).map { GridItem.Theme(it) }
     }

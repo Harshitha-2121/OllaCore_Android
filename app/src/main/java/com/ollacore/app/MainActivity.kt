@@ -120,7 +120,11 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    OllacoreNavHost()
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        com.ollacore.app.ui.appearance.LocalAppDark provides effectiveDark
+                    ) {
+                        OllacoreNavHost()
+                    }
                 }
             }
             }

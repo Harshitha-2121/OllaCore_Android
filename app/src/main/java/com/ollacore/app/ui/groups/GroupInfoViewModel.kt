@@ -148,10 +148,9 @@ class GroupInfoViewModel(application: Application) : AndroidViewModel(applicatio
     private suspend fun refreshMembers(selfId: String?) {
         val token = roomToken ?: return
         val roomId = _uiState.value.roomId
+        val selfPhone = sessionStore.phone.first()
         chatRepo.getParticipants(token, roomId).onSuccess { resp ->
-            val admin = resp.participants.any {
-                (it.principalId == selfId || it.displayName == selfId) && it.role.equals("admin", ignoreCase = true)
-            }
+            val admin = isSelfAdmin(resp.participants, selfId, selfPhone)
             _uiState.update { it.copy(members = resp.participants, isAdmin = admin) }
         }.onFailure { e ->
             _uiState.update { it.copy(error = e.message) }
@@ -543,6 +542,24 @@ fun memberSubtitle(m: Participant, selfId: String?): String {
 }
 
 fun isGroupAdmin(m: Participant): Boolean = m.role.equals("admin", ignoreCase = true)
+
+/** Privileged roster roles (group creators often carry owner/creator, not admin). */
+private val ADMIN_ROLES = setOf("admin", "owner", "creator")
+
+/**
+ * True when the session user appears in the roster with a privileged role.
+ * Identity matches the principal id first, then the session phone (principal
+ * formats vary; the old displayName fallback could never match a user id).
+ * Role match is case-insensitive; a missing role never grants admin. Pure.
+ */
+fun isSelfAdmin(participants: List<Participant>, selfId: String?, selfPhone: String?): Boolean {
+    if (selfId == null && selfPhone == null) return false
+    return participants.any { p ->
+        val isSelf = (selfId != null && p.principalId == selfId) ||
+            (selfPhone != null && p.phone == selfPhone)
+        isSelf && p.role != null && ADMIN_ROLES.any { role -> p.role.equals(role, ignoreCase = true) }
+    }
+}
 
 /** Live member search across name/phone/id; blank query returns all. */
 fun filterMembers(members: List<Participant>, query: String): List<Participant> {

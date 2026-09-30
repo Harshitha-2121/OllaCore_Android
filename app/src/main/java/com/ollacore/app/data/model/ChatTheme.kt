@@ -68,6 +68,28 @@ object ChatThemes {
         outgoingText = Color.White
     )
 
+    /**
+     * Light twin of the Default theme: same scheme-aware Doodle wallpaper
+     * (null colors fall back to the app colorScheme), white incoming
+     * bubbles, brand-green outgoing. Never in [all] (the grid shows one
+     * Default card); selected by [defaultFor].
+     */
+    val defaultLight: ChatTheme = ChatTheme(
+        id = "default_light",
+        name = "Default",
+        wallpaper = ChatWallpaper.Doodle(),
+        incomingBubble = Color.White,
+        incomingText = Color(INK_DARK),
+        outgoingBubble = Color(0xFF00A884),
+        outgoingText = Color.White
+    )
+
+    /** Default follows the app dark/light mode; explicit themes stay fixed. */
+    fun defaultFor(dark: Boolean): ChatTheme = if (dark) default else defaultLight
+
+    /** True for either Default variant (both persist as the Default choice). */
+    fun isDefaultId(id: String?): Boolean = id == default.id || id == defaultLight.id
+
     val all: List<ChatTheme> = listOf(
         default,
         ChatTheme(

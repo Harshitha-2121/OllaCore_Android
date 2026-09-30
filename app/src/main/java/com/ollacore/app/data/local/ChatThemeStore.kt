@@ -55,8 +55,14 @@ class ChatThemeStore(private val context: Context) {
 
     val themeId: Flow<String> = context.chatThemeStore.data.map { it[KEY_THEME] ?: ChatThemes.default.id }
 
+    /** Raw custom tweaks (bubble/wallpaper overrides), without the theme base. */
+    val custom: Flow<ChatCustom> = context.chatThemeStore.data.map { customOf(it) }
+
     val style: Flow<ResolvedChatStyle> = context.chatThemeStore.data.map { prefs ->
-        val theme = ChatThemes.find(prefs[KEY_THEME])
+        resolveChatStyle(ChatThemes.find(prefs[KEY_THEME]), customOf(prefs))
+    }
+
+    private fun customOf(prefs: androidx.datastore.preferences.core.Preferences): ChatCustom {
         val inArgb = prefs[KEY_IN] ?: 0
         val outArgb = prefs[KEY_OUT] ?: 0
         val textMode = runCatching { ChatTextMode.valueOf(prefs[KEY_TEXT_MODE] ?: "AUTO") }
@@ -64,16 +70,13 @@ class ChatThemeStore(private val context: Context) {
         val cornerDp = prefs[KEY_CORNER]?.takeIf { it >= 0f }
         val opacity = prefs[KEY_OPACITY]?.takeIf { it >= 0f }
         val wallpaper = wallpaperOf(prefs[KEY_WALLPAPER_ID], prefs[KEY_WALLPAPER_URI], prefs[KEY_WALLPAPER_COLOR] ?: 0)
-        resolveChatStyle(
-            theme,
-            ChatCustom(
-                incomingBubble = if (inArgb != 0) Color(inArgb) else null,
-                outgoingBubble = if (outArgb != 0) Color(outArgb) else null,
-                textMode = textMode,
-                corner = cornerDp?.dp,
-                opacity = opacity,
-                wallpaper = wallpaper
-            )
+        return ChatCustom(
+            incomingBubble = if (inArgb != 0) Color(inArgb) else null,
+            outgoingBubble = if (outArgb != 0) Color(outArgb) else null,
+            textMode = textMode,
+            corner = cornerDp?.dp,
+            opacity = opacity,
+            wallpaper = wallpaper
         )
     }
 
