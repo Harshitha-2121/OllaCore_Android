@@ -3,6 +3,7 @@ package com.ollacore.app.data.di
 import android.content.Context
 import com.ollacore.app.data.e2ee.E2eeManager
 import com.ollacore.app.data.e2ee.ForwardSecrecyManager
+import com.ollacore.app.data.local.BroadcastStore
 import com.ollacore.app.data.local.CallLogStore
 import com.ollacore.app.data.local.ChatPrefsStore
 import com.ollacore.app.data.local.ChatThemeStore
@@ -25,6 +26,7 @@ class AppContainer(private val context: Context) {
     val groupEventStore = GroupEventStore(context)
     val messageStatusStore = MessageStatusStore(context)
     val chatThemeStore = ChatThemeStore(context)
+    val broadcastStore = BroadcastStore(context)
 
     val api = OllacoreApi(
         apiBase = "https://api.ollacore.com/v1",

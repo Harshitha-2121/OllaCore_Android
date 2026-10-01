@@ -68,6 +68,7 @@ import com.ollacore.app.ui.appearance.LocalChatTheme
 import com.ollacore.app.ui.appearance.ChatWallpaperView
 import com.ollacore.app.ui.appearance.rememberChatStyle
 import com.ollacore.app.data.model.bubbleShapes
+import com.ollacore.app.data.model.luminance
 import com.ollacore.app.ui.theme.ReadBlue
 import com.ollacore.app.ui.attachments.AttachmentPickerSheet
 import kotlinx.coroutines.launch
@@ -1664,6 +1665,7 @@ private fun MediaMessageContent(
                 filename = docName,
                 mime = effectiveMime,
                 byteSize = byteSize,
+                caption = if (filename != null) caption else "",
                 onResolveUrl = { if (attachmentId != null) onResolveUrl(attachmentId) },
                 onGradient = onGradient,
                 onOpen = { u -> onOpenDocument(u, docName, effectiveMime) }
@@ -1808,37 +1810,111 @@ private fun DocumentBubbleContent(
     filename: String,
     mime: String,
     byteSize: Long?,
+    caption: String = "",
     onResolveUrl: () -> Unit,
     onGradient: Boolean = false,
     onOpen: (String) -> Unit = {}
 ) {
-    val soft = bubbleTextColor(onGradient).copy(alpha = 0.8f)
-    Surface(
-        // Tap opens the in-app viewer (spec 27); the viewer itself offers external open.
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.clickable(enabled = url != null) { url?.let(onOpen) }
-    ) {
-        Row(modifier = Modifier.padding(10.dp).widthIn(max = 260.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(44.dp)) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(if (mime.contains("pdf")) Icons.Default.PictureAsPdf else Icons.Default.InsertDriveFile, contentDescription = "📄 Document", tint = MaterialTheme.colorScheme.onPrimaryContainer)
+    // WhatsApp-style doc card: a slightly distinct shade of the host bubble
+    // (lighter green card on the deep-green outgoing bubble) so the
+    // attachment reads as its own component, not a generic file card.
+    val theme = LocalChatTheme.current
+    val bubbleBase = when {
+        theme != null && onGradient -> theme.outgoingBubble
+        theme != null -> theme.incomingBubble
+        onGradient -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.surface
+    }
+    val card = bubbleBase.cardShade()
+    val onCard = when {
+        theme != null && onGradient -> theme.outgoingText
+        theme != null -> theme.incomingText
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    val meta = MaterialTheme.colorScheme.onSurfaceVariant
+    val isPdf = mime.contains("pdf", ignoreCase = true)
+    val typeLabel = shortDocType(mime, filename)
+    val sizeLine = if (byteSize != null) "${formatBytes(byteSize)} • $typeLabel" else typeLabel
+    Column {
+        Surface(
+            // Tap opens the in-app viewer (spec 27); the viewer itself offers external open.
+            color = card,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.clickable(enabled = url != null) { url?.let(onOpen) }
+        ) {
+            Row(modifier = Modifier.padding(10.dp).widthIn(max = 260.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = RoundedCornerShape(8.dp), color = if (isPdf) androidx.compose.ui.graphics.Color(0xFFE03131) else MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(44.dp)) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            if (isPdf) Icons.Default.PictureAsPdf else Icons.Default.InsertDriveFile,
+                            contentDescription = "Document",
+                            tint = if (isPdf) androidx.compose.ui.graphics.Color.White else MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
                 }
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(filename, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
-                Text("${mime}${if (byteSize != null) " • ${formatBytes(byteSize)}" else ""}", style = MaterialTheme.typography.labelSmall, color = soft)
-                if (url == null) {
-                    TextButton(onClick = onResolveUrl, contentPadding = PaddingValues(0.dp)) { Text("Prepare download") }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        filename,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = if (theme != null) onCard else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(sizeLine, style = MaterialTheme.typography.labelSmall, color = if (theme != null) onCard.copy(alpha = 0.7f) else meta)
+                    if (url == null) {
+                        TextButton(
+                            onClick = onResolveUrl,
+                            contentPadding = PaddingValues(0.dp),
+                            colors = ButtonDefaults.textButtonColors(contentColor = if (theme != null) onCard else MaterialTheme.colorScheme.primary)
+                        ) { Text("Prepare download") }
+                    }
                 }
-            }
-            IconButton(onClick = {
-                if (url != null) onOpen(url) else onResolveUrl()
-            }) {
-                Icon(Icons.Default.Download, contentDescription = "Open document")
+                IconButton(onClick = {
+                    if (url != null) onOpen(url) else onResolveUrl()
+                }) {
+                    Icon(Icons.Default.Download, contentDescription = "Open document", tint = if (theme != null) onCard else meta)
+                }
             }
         }
+        // Caption below the card, inside the same outgoing bubble (reference).
+        // Skipped when it merely repeats the filename shown on the card.
+        if (caption.isNotBlank() && caption.trim() != filename.trim()) {
+            Text(
+                caption,
+                style = MaterialTheme.typography.bodyMedium,
+                color = bubbleTextColor(onGradient),
+                modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Lifts dark bubble colors / deepens light ones by ~10% so an attachment
+ * card reads distinct from its host bubble on any theme. Pure.
+ */
+private fun androidx.compose.ui.graphics.Color.cardShade(): androidx.compose.ui.graphics.Color {
+    // Lift dark bubbles toward white / deepen light ones by ~10% so the
+    // card reads distinct on any theme. Pure arithmetic, no extra API.
+    val dark = luminance(this) <= 0.4f
+    fun blend(channel: Float): Float =
+        if (dark) channel + (1f - channel) * 0.10f else channel * 0.90f
+    return copy(red = blend(red), green = blend(green), blue = blend(blue))
+}
+
+/** Short type label for the doc meta line ("246 kB • PDF"), never the raw mime. Pure. */
+private fun shortDocType(mime: String, filename: String): String {
+    val m = mime.lowercase()
+    return when {
+        "pdf" in m -> "PDF"
+        "msword" in m || "wordprocessingml" in m -> "DOC"
+        "spreadsheetml" in m || "ms-excel" in m -> "XLS"
+        "presentationml" in m || "ms-powerpoint" in m -> "PPT"
+        "zip" in m || "x-rar" in m || "x-7z" in m -> "ZIP"
+        m == "text/plain" || filename.endsWith(".txt", ignoreCase = true) -> "TXT"
+        else -> m.substringAfter("/").take(8).uppercase().ifBlank { "FILE" }
     }
 }
 

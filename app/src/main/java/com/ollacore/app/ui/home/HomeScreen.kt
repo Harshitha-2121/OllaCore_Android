@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
@@ -121,7 +122,21 @@ fun HomeScreen(
     // Updates-tab overflow (Settings lives here now that tabs match the reference)
     onSettings: () -> Unit = {},
     // Reference home-menu parity: communities has no creation backend yet.
-    onNewCommunity: () -> Unit = {}
+    onNewCommunity: () -> Unit = {},
+    // Reference "Read all": really marks unread rooms read (progress + result).
+    readAllState: ReadAllState = ReadAllState.Idle,
+    onReadAll: () -> Unit = {},
+    onConsumeReadAll: () -> Unit = {},
+    // Reference overflow "Starred": cross-chat browser (own route).
+    onStarred: () -> Unit = {},
+    // Reference overflow "Payments": integration-point screen (no backend yet).
+    onPayments: () -> Unit = {},
+    // Reference overflow "Broadcast lists": local lists screen (send needs backend).
+    onBroadcasts: () -> Unit = {},
+    // Reference "Archived" screen entry + swipe gestures.
+    onArchived: () -> Unit = {},
+    onArchiveChat: (String) -> Unit = {},
+    onUnarchiveChat: (String) -> Unit = {}
 ) {
     // Enums are not SaveableStateRegistry-compatible: persist the name, derive the tab.
     var tabName by rememberSaveable { mutableStateOf(HomeTab.CHATS.name) }
@@ -248,12 +263,7 @@ fun HomeScreen(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Broadcast lists") },
-                                    onClick = {
-                                        showMenu = false
-                                        menuNote = "Broadcast lists" to
-                                            "One-to-many broadcast messaging needs a backend broadcast API. " +
-                                            "See OLLACORE-BACKEND-SPEC.txt. Nothing here is faked."
-                                    }
+                                    onClick = { showMenu = false; onBroadcasts() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Linked devices") },
@@ -261,30 +271,15 @@ fun HomeScreen(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Starred") },
-                                    onClick = {
-                                        showMenu = false
-                                        menuNote = "Starred messages" to
-                                            "Starred messages live inside each chat today: long-press any " +
-                                            "message and tap Star. A cross-chat Starred view arrives with the backend."
-                                    }
+                                    onClick = { showMenu = false; onStarred() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Payments") },
-                                    onClick = {
-                                        showMenu = false
-                                        menuNote = "Payments" to
-                                            "In-chat payments need the Ollacore payments service, which does " +
-                                            "not exist yet. See OLLACORE-BACKEND-SPEC.txt."
-                                    }
+                                    onClick = { showMenu = false; onPayments() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Read all") },
-                                    onClick = {
-                                        showMenu = false
-                                        menuNote = "Read all" to
-                                            "Marking every chat read needs a server API. Open each chat to " +
-                                            "send its read receipt - unreads clear as you go."
-                                    }
+                                    onClick = { showMenu = false; onReadAll() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Settings") },
@@ -304,6 +299,39 @@ fun HomeScreen(
                                         TextButton(onClick = { menuNote = null }) { Text("Got it") }
                                     }
                                 )
+                            }
+                            // Reference "Read all" states: working progress + result.
+                            when (val ra = readAllState) {
+                                is ReadAllState.Working -> AlertDialog(
+                                    onDismissRequest = {},
+                                    title = { Text("Marking all read") },
+                                    text = {
+                                        Column {
+                                            Text("Sending read receipts… ${ra.done} of ${ra.total}")
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            LinearProgressIndicator(
+                                                progress = { ra.done.toFloat() / ra.total.coerceAtLeast(1).toFloat() },
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    },
+                                    confirmButton = {}
+                                )
+                                is ReadAllState.Done -> AlertDialog(
+                                    onDismissRequest = onConsumeReadAll,
+                                    title = { Text("Read all") },
+                                    text = {
+                                        Text(
+                                            if (ra.marked == 0 && ra.failed == 0) "No unread chats - nothing to mark."
+                                            else "Marked ${ra.marked} chat(s) read." +
+                                                if (ra.failed > 0) " ${ra.failed} failed - open them to retry." else ""
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = onConsumeReadAll) { Text("OK") }
+                                    }
+                                )
+                                ReadAllState.Idle -> Unit
                             }
                         }
                     }
@@ -422,6 +450,9 @@ fun HomeScreen(
                     selectedIds = selectedIds,
                     pinnedRooms = pinnedRooms,
                     onToggleSelect = onToggleSelect,
+                    onArchived = onArchived,
+                    onArchiveChat = onArchiveChat,
+                    onUnarchiveChat = onUnarchiveChat,
                     modifier = Modifier.fillMaxSize()
                 )
                 HomeTab.UPDATES -> com.ollacore.app.ui.updates.UpdatesContent(
@@ -458,6 +489,9 @@ private fun ChatsContent(
     selectedIds: Set<String> = emptySet(),
     pinnedRooms: Set<String> = emptySet(),
     onToggleSelect: (String) -> Unit = {},
+    onArchived: () -> Unit = {},
+    onArchiveChat: (String) -> Unit = {},
+    onUnarchiveChat: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Same SaveableStateRegistry rule as tabs: persist the enum name, not the enum.
@@ -474,7 +508,6 @@ private fun ChatsContent(
         onToggleSelect(roomId)
     }
     val (isOnline, wasOffline) = com.ollacore.app.ui.common.rememberConnectivity()
-    var archivedOpen by rememberSaveable { mutableStateOf(false) }
 
     // Closed chats never appear in the main list; they live in Archived below.
     val unarchived = remember(uiState.inbox, archivedRooms) {
@@ -603,23 +636,30 @@ private fun ChatsContent(
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(visible, key = { it.roomId }) { item ->
-                    InboxItemRow(
-                        item = item,
-                        myUserId = uiState.myUserId,
-                        isSelected = item.roomId in selectedIds,
-                        isPinned = item.roomId in pinnedRooms,
-                        onClick = { onTap(item.roomId) },
-                        onLongClick = { onLongPress(item.roomId) }
-                    )
+                    SwipeableChatRow(
+                        roomId = item.roomId,
+                        archived = false,
+                        onArchive = onArchiveChat,
+                        onUnarchive = onUnarchiveChat
+                    ) {
+                        InboxItemRow(
+                            item = item,
+                            myUserId = uiState.myUserId,
+                            isSelected = item.roomId in selectedIds,
+                            isPinned = item.roomId in pinnedRooms,
+                            onClick = { onTap(item.roomId) },
+                            onLongClick = { onLongPress(item.roomId) }
+                        )
+                    }
                 }
-                // Archived section (Close chat target; opening unarchives via caller).
+                // Archived entry: opens the dedicated screen (reference flow).
                 if (archivedItems.isNotEmpty()) {
                     item(key = "archived-header") {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { archivedOpen = !archivedOpen }
+                                .clickable { onArchived() }
                                 .padding(horizontal = 20.dp, vertical = 12.dp)
                         ) {
                             Icon(
@@ -636,22 +676,10 @@ private fun ChatsContent(
                                 modifier = Modifier.weight(1f)
                             )
                             Icon(
-                                if (archivedOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = null,
+                                Icons.Filled.KeyboardArrowRight,
+                                contentDescription = "Open archived",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    if (archivedOpen) {
-                        items(archivedItems, key = { "arch-" + it.roomId }) { item ->
-                            InboxItemRow(
-                                item = item,
-                                myUserId = uiState.myUserId,
-                                isSelected = item.roomId in selectedIds,
-                                isPinned = item.roomId in pinnedRooms,
-                                onClick = { onTap(item.roomId) },
-                                onLongClick = { onLongPress(item.roomId) }
                             )
                         }
                     }

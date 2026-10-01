@@ -513,7 +513,7 @@ fun GroupCallSheet(
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 32.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 32.dp).navigationBarsPadding()) {
             Text("New group call", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(4.dp))
             Text(

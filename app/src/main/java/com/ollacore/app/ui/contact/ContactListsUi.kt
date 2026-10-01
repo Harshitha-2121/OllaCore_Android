@@ -83,7 +83,7 @@ fun ChooseListSheet(
     sheetState: SheetState = rememberModalBottomSheetState()
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
             Text(
                 "Choose list",
                 style = MaterialTheme.typography.titleLarge,

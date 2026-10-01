@@ -35,7 +35,7 @@ fun GlobalSearchScreen(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onTab: (SearchTab) -> Unit,
-    onOpenChat: (String) -> Unit,
+    onOpenChat: (String, String?) -> Unit,
     onBack: () -> Unit,
     onClear: () -> Unit,
     recentSearches: List<String> = emptyList(),
@@ -164,7 +164,7 @@ fun GlobalSearchScreen(
                                 ChatRow(
                                     item = item,
                                     query = uiState.query,
-                                    onClick = { onOpenChat(item.roomId) }
+                                    onClick = { onOpenChat(item.roomId, null) }
                                 )
                             }
                         }
@@ -188,7 +188,7 @@ fun GlobalSearchScreen(
                                         )
                                     },
                                     supportingContent = { Text("in ${hit.roomName}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                    modifier = Modifier.clickable { onOpenChat(hit.roomId) }
+                                    modifier = Modifier.clickable { onOpenChat(hit.roomId, hit.message.id) }
                                 )
                                 HorizontalDivider()
                             }

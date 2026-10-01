@@ -17,6 +17,13 @@ data class HomeUiState(
     val myUserId: String? = null
 )
 
+/** Read-all progress (reference overflow action, really executed). */
+sealed interface ReadAllState {
+    data object Idle : ReadAllState
+    data class Working(val done: Int, val total: Int) : ReadAllState
+    data class Done(val marked: Int, val failed: Int) : ReadAllState
+}
+
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val container = (application as OllacoreApp).container
     private val directoryRepo = container.directoryRepository
@@ -111,6 +118,47 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _readAllState = MutableStateFlow<ReadAllState>(ReadAllState.Idle)
+    val readAllState: StateFlow<ReadAllState> = _readAllState.asStateFlow()
+
+    fun consumeReadAll() {
+        _readAllState.value = ReadAllState.Idle
+    }
+
+    /**
+     * Reference "Read all": sends a real read receipt for the latest message
+     * of every unread room (room token + latest id + markRead, same calls an
+     * opened chat makes), then reloads the inbox so badges/filter counts
+     * refresh. Empty inbox reports Done(0, 0) gracefully.
+     */
+    fun markAllRead() {
+        viewModelScope.launch {
+            val token = sessionStore.sessionToken.first() ?: return@launch
+            val targets = _uiState.value.inbox.filter { it.unreadCount > 0 }.take(30)
+            if (targets.isEmpty()) {
+                _readAllState.value = ReadAllState.Done(0, 0)
+                return@launch
+            }
+            var marked = 0
+            var failed = 0
+            targets.forEachIndexed { index, item ->
+                _readAllState.value = ReadAllState.Working(index + 1, targets.size)
+                val ok = runCatching {
+                    val roomToken = directoryRepo.getRoomToken(token, item.roomId, "android-readall")
+                        .getOrThrow().accessToken
+                    val latest = container.chatRepository
+                        .listMessages(roomToken, item.roomId, limit = 1)
+                        .getOrThrow().messages.firstOrNull()
+                        ?: throw IllegalStateException("no messages")
+                    container.chatRepository.markRead(roomToken, item.roomId, latest.id).getOrThrow()
+                }.isSuccess
+                if (ok) marked++ else failed++
+            }
+            _readAllState.value = ReadAllState.Done(marked, failed)
+            loadInbox(token)
+        }
+    }
+
     // ── Bulk selection actions (CLIENT-ONLY stores; same semantics as the
     //   per-chat overflow menu: mute flag, archive, wipe(Int.MAX_VALUE)+archive) ──
 
@@ -143,8 +191,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Archive when any selected room is unarchived, else unarchive all. */
-    fun toggleArchiveSelected() {
-        val ids = _selectedIds.value
+    fun toggleArchiveSelected() {        val ids = _selectedIds.value
         if (ids.isEmpty()) return
         viewModelScope.launch {
             val archived = runCatching {
@@ -153,6 +200,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             val archive = ids.any { it !in archived }
             ids.forEach { runCatching { container.chatPrefsStore.setArchived(it, archive) } }
             if (archive) _selectedIds.value = emptySet()
+        }
+    }
+
+    /** Single-room archive (swipe gesture, Archived screen button). */
+    fun archiveChat(roomId: String) {
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.setArchived(roomId, true) }
+        }
+    }
+
+    /** Single-room unarchive (swipe gesture, Archived screen button). */
+    fun unarchiveChat(roomId: String) {
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.setArchived(roomId, false) }
         }
     }
 

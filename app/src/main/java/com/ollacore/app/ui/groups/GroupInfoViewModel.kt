@@ -151,7 +151,9 @@ class GroupInfoViewModel(application: Application) : AndroidViewModel(applicatio
         val selfPhone = sessionStore.phone.first()
         chatRepo.getParticipants(token, roomId).onSuccess { resp ->
             val admin = isSelfAdmin(resp.participants, selfId, selfPhone)
-            _uiState.update { it.copy(members = resp.participants, isAdmin = admin) }
+            // selfId was previously never written to state ("You" never
+            // showed and you-first sorting never applied); store it now.
+            _uiState.update { it.copy(members = resp.participants, isAdmin = admin, selfId = selfId) }
         }.onFailure { e ->
             _uiState.update { it.copy(error = e.message) }
         }
@@ -420,18 +422,16 @@ class GroupInfoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Confirm add: admin-gated client-side (server enforces too), sequential
-     * per-member requests, failures keep selection for retry, roster refreshes.
+     * Confirm add: sequential per-member requests, failures keep selection
+     * for retry, roster refreshes. NOT client-gated on isAdmin: the roster
+     * often carries no roles, so a local gate would brick the feature; the
+     * server enforces admin rights and rejections land in addErrors per row.
      */
     fun confirmAddMembers() {
         val roomId = _uiState.value.roomId
         val token = roomToken
         val selected = _uiState.value.addSelected.toList()
         if (token == null || roomId.isBlank() || selected.isEmpty()) return
-        if (!_uiState.value.isAdmin) {
-            _uiState.update { it.copy(error = "Only group admins can add members.") }
-            return
-        }
         viewModelScope.launch {
             _uiState.update { it.copy(addBusy = true, addErrors = emptyMap(), error = null) }
             val failed = mutableMapOf<String, String>()

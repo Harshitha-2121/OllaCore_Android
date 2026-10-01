@@ -40,7 +40,7 @@ fun AttachmentPickerSheet(
     onPickRecent: (Uri) -> Unit = {}
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp).padding(bottom = 24.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp).padding(bottom = 24.dp).navigationBarsPadding()) {
             Text(
                 "Share",
                 style = MaterialTheme.typography.titleMedium,

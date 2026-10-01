@@ -160,15 +160,21 @@ fun GroupAddMembersScreen(
                             },
                             trailingContent = {
                                 if (!alreadyMember) {
+                                    // NOTE: intentionally NOT gated on canAdd. The participants
+                                    // endpoint often omits roles, so isAdmin is unreliable: a
+                                    // client-side gate here permanently dead-locks selection.
+                                    // Already-added members stay unselectable; the server
+                                    // enforces admin rights at confirm and per-row errors
+                                    // surface there (addErrors + retry keeps selection).
                                     Checkbox(
                                         checked = checked,
-                                        enabled = canAdd && !busy,
+                                        enabled = !busy,
                                         onCheckedChange = { onToggle(contact.userId) }
                                     )
                                 }
                             },
                             modifier = Modifier.clickable(
-                                enabled = canAdd && !alreadyMember && !busy
+                                enabled = !alreadyMember && !busy
                             ) { onToggle(contact.userId) }
                         )
                         HorizontalDivider()

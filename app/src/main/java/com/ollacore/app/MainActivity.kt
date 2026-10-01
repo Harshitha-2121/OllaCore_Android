@@ -285,6 +285,7 @@ fun OllacoreNavHost() {
                 com.ollacore.app.data.local.ChatPrefsStore(homeContext.applicationContext).mutedRooms
             }.collectAsState(initial = emptySet())
             val selectedChatIds by homeViewModel.selectedIds.collectAsState()
+            val readAllState by homeViewModel.readAllState.collectAsState()
 
             HomeScreen(
                 uiState = homeState,
@@ -313,12 +314,9 @@ fun OllacoreNavHost() {
                 onNotifications = { navController.navigate("notifSettings") },
                 onNewGroup = { navController.navigate("newGroup") },
                 onNewCommunity = {
-                    // No community-creation backend exists yet: honest placeholder.
-                    android.widget.Toast.makeText(
-                        navController.context,
-                        "Communities are coming soon",
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
+                    // Communities run on group chats until the backend
+                    // service lands: intro explains, then real group flow.
+                    navController.navigate("communityIntro")
                 },
                 onSettings = { navController.navigate("settings") },
                 archivedRooms = archivedRooms,
@@ -335,7 +333,16 @@ fun OllacoreNavHost() {
                 onTogglePin = { homeViewModel.togglePinSelected() },
                 onToggleMute = { homeViewModel.toggleMuteSelected() },
                 onToggleArchive = { homeViewModel.toggleArchiveSelected() },
-                onDeleteSelected = { homeViewModel.deleteSelected() }
+                onDeleteSelected = { homeViewModel.deleteSelected() },
+                readAllState = readAllState,
+                onReadAll = { homeViewModel.markAllRead() },
+                onConsumeReadAll = { homeViewModel.consumeReadAll() },
+                onStarred = { navController.navigate("starredAll") },
+                onPayments = { navController.navigate("payments") },
+                onBroadcasts = { navController.navigate("broadcasts") },
+                onArchived = { navController.navigate("archived") },
+                onArchiveChat = { homeViewModel.archiveChat(it) },
+                onUnarchiveChat = { homeViewModel.unarchiveChat(it) }
             )
         }
 
@@ -557,8 +564,9 @@ fun OllacoreNavHost() {
                 onQueryChange = searchViewModel::updateQuery,
                 onSearch = searchViewModel::searchImmediate,
                 onResultClick = { message ->
-                    // Navigate back to chat with the message highlighted
-                    navController.popBackStack()
+                    // Open the chat scrolled to the tapped message (was: pop
+                    // back with no navigation, losing the result entirely).
+                    navController.navigate("chat/$roomId?scrollTo=${message.id}")
                 },
                 onBack = { navController.popBackStack() },
                 onClear = searchViewModel::clearSearch
@@ -617,12 +625,7 @@ fun OllacoreNavHost() {
                 onNewGroup = { navController.navigate("newGroup") },
                 onNewContact = { navController.navigate("newContact") },
                 onNewCommunity = {
-                    // No community-creation backend exists yet: honest placeholder.
-                    android.widget.Toast.makeText(
-                        navController.context,
-                        "Communities are coming soon",
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
+                    navController.navigate("communityIntro")
                 },
                 onOpenChat = { targetRoomId ->
                     navController.navigate("chat/$targetRoomId")
@@ -784,7 +787,12 @@ fun OllacoreNavHost() {
                 onQueryChange = globalSearchViewModel::updateQuery,
                 onSearch = globalSearchViewModel::searchNow,
                 onTab = globalSearchViewModel::setTab,
-                onOpenChat = { targetRoomId -> navController.navigate("chat/$targetRoomId") },
+                onOpenChat = { targetRoomId, messageId ->
+                    navController.navigate(
+                        if (messageId != null) "chat/$targetRoomId?scrollTo=$messageId"
+                        else "chat/$targetRoomId"
+                    )
+                },
                 onBack = { navController.popBackStack() },
                 onClear = globalSearchViewModel::clear,
                 recentSearches = recents,
@@ -905,6 +913,81 @@ fun OllacoreNavHost() {
                 onBack = { navController.popBackStack() },
                 onOpenMessage = { messageId ->
                     navController.navigate("chat/$roomId?scrollTo=$messageId")
+                }
+            )
+        }
+
+        composable("archived") {
+            val archivedViewModel: HomeViewModel = viewModel()
+            val archivedState by archivedViewModel.uiState.collectAsState()
+            val archivedContext = LocalContext.current
+            val archivedRoomsOnly by remember(archivedContext) {
+                com.ollacore.app.data.local.ChatPrefsStore(archivedContext.applicationContext).archivedRooms
+            }.collectAsState(initial = emptySet())
+
+            LaunchedEffect(Unit) {
+                archivedViewModel.refresh()
+            }
+
+            com.ollacore.app.ui.home.ArchivedChatsScreen(
+                items = archivedState.inbox.filter { it.roomId in archivedRoomsOnly },
+                myUserId = archivedState.myUserId,
+                onOpenChat = { roomId ->
+                    archivedViewModel.markOpened(roomId)
+                    navController.navigate("chat/$roomId")
+                },
+                onUnarchive = { archivedViewModel.unarchiveChat(it) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable("broadcasts") {
+            val broadcastsViewModel: com.ollacore.app.ui.broadcast.BroadcastsViewModel = viewModel()
+            val broadcastsState by broadcastsViewModel.uiState.collectAsState()
+
+            LaunchedEffect(Unit) {
+                broadcastsViewModel.load()
+            }
+
+            com.ollacore.app.ui.broadcast.BroadcastsScreen(
+                uiState = broadcastsState,
+                onBack = { navController.popBackStack() },
+                onShowCreate = { broadcastsViewModel.setShowCreate(it) },
+                onCreate = { name, members -> broadcastsViewModel.createList(name, members) },
+                onDelete = { broadcastsViewModel.deleteList(it) },
+                onSend = { broadcastsViewModel.showSendNote(it) },
+                onConsumeSendNote = { broadcastsViewModel.consumeSendNote() }
+            )
+        }
+
+        composable("communityIntro") {
+            com.ollacore.app.ui.communities.CommunityIntroScreen(
+                onBack = { navController.popBackStack() },
+                onGetStarted = { navController.navigate("newGroup") }
+            )
+        }
+
+        composable("payments") {
+            com.ollacore.app.ui.payments.PaymentsScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable("starredAll") {            val starredAllViewModel: com.ollacore.app.ui.chat.StarredAllViewModel = viewModel()
+            val starredAllState by starredAllViewModel.uiState.collectAsState()
+
+            LaunchedEffect(Unit) {
+                starredAllViewModel.load()
+            }
+
+            com.ollacore.app.ui.chat.StarredAllScreen(
+                uiState = starredAllState,
+                onBack = { navController.popBackStack() },
+                onOpenMessage = { roomId, messageId ->
+                    navController.navigate("chat/$roomId?scrollTo=$messageId")
+                },
+                onUnstar = { roomId, messageId ->
+                    starredAllViewModel.unstar(roomId, messageId)
                 }
             )
         }
