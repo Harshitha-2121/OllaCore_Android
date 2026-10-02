@@ -1,12 +1,17 @@
 package com.ollacore.app
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.registerForActivityResult
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -75,9 +80,20 @@ import com.ollacore.app.ui.theme.OllacoreTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    // Android 13+: notifications (incl. full-screen incoming-call alerts) need
+    // a runtime grant - requested once at startup if missing.
+    private val notifPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* denial degrades to silent notifications; calls still work in-app */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            runCatching { notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+        }
         setContent {
             // Spec 31: user theme (Blue/Green/Purple/Dark/System) drives the whole app.
             val appContext = LocalContext.current.applicationContext

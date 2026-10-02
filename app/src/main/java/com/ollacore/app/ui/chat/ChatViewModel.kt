@@ -16,7 +16,10 @@ import com.ollacore.app.data.remote.ApiException
 import com.ollacore.app.data.remote.ChatWebSocket
 import com.ollacore.app.data.remote.WebSocketEvent
 import com.ollacore.app.data.remote.WsMessage
+import com.ollacore.app.ui.call.CallRinger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -126,6 +129,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var chatWebSocket: ChatWebSocket? = null
     private var roomId: String = ""
     private var currentUserId: String = ""
+    /** In-app ringing: bounds the dialog to the 45s ring window and drives [CallRinger]. */
+    private var incomingRingJob: Job? = null
 
     // ── Message status correlation (Category 1 - ack/receipts already in Ollacore WS) ──
     /** request_id (WS frame) -> client_message_id, so ack/error can mark Sending/Sent/Failed. */
@@ -379,12 +384,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update {
                         it.copy(incomingCall = IncomingCall(roomId = event.roomId, callId = event.callId, initiator = event.initiator))
                     }
+                    startIncomingRing()
                 }
             }
             is WebSocketEvent.CallEnded -> {
                 // Unanswered ringing call that ends -> CLIENT-ONLY missed-call log (no backend).
                 val ringing = _uiState.value.incomingCall
                 if (ringing != null && ringing.roomId == event.roomId) {
+                    stopIncomingRing()
                     val s = _uiState.value
                     viewModelScope.launch {
                         runCatching {
@@ -397,7 +404,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     audioOnly = null, // media type unknown for missed calls
                                     startedAt = System.currentTimeMillis(),
                                     durationSec = 0L,
-                                    status = com.ollacore.app.data.local.CallStatus.MISSED
+                                    status = com.ollacore.app.data.local.CallStatus.MISSED,
+                                    endedAt = System.currentTimeMillis(),
+                                    endedReason = com.ollacore.app.data.local.CallEndReason.NO_ANSWER
                                 )
                             )
                         }
@@ -1418,12 +1427,56 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** User accepted the ringing call (navigation to the call screen is handled by the UI). */
     fun acceptIncomingCall() {
+        stopIncomingRing()
         _uiState.update { it.copy(incomingCall = null) }
     }
 
     /** User declined: dismiss locally (caller stops on timeout/leave; no decline frame in Ollacore WS). */
     fun declineIncomingCall() {
+        stopIncomingRing()
         _uiState.update { it.copy(incomingCall = null) }
+    }
+
+    // ── In-app ringing: sound + vibration + 45s local ring window ──
+
+    private fun startIncomingRing() {
+        CallRinger.setMode(getApplication(), CallRinger.Mode.INCOMING)
+        incomingRingJob?.cancel()
+        val ringStart = System.currentTimeMillis()
+        incomingRingJob = viewModelScope.launch {
+            delay(45_000L)
+            val ringing = _uiState.value.incomingCall ?: return@launch
+            // Ring window closed with no server-side end event: close as missed.
+            // (Do NOT cancel this job from inside itself - its own log write is a
+            // suspension point and self-cancellation would swallow it.)
+            incomingRingJob = null
+            CallRinger.stop()
+            _uiState.update {
+                if (it.incomingCall?.roomId == ringing.roomId) it.copy(incomingCall = null) else it
+            }
+            runCatching {
+                container.callLogStore.log(
+                    com.ollacore.app.data.local.CallLogEntry(
+                        id = "call-${UUID.randomUUID()}",
+                        roomId = ringing.roomId,
+                        peerName = _uiState.value.peerName ?: _uiState.value.peerPhone ?: "",
+                        direction = com.ollacore.app.data.local.CallDirection.INCOMING,
+                        audioOnly = null,
+                        startedAt = ringStart,
+                        durationSec = 0L,
+                        status = com.ollacore.app.data.local.CallStatus.MISSED,
+                        endedAt = System.currentTimeMillis(),
+                        endedReason = com.ollacore.app.data.local.CallEndReason.NO_ANSWER
+                    )
+                )
+            }
+        }
+    }
+
+    private fun stopIncomingRing() {
+        incomingRingJob?.cancel()
+        incomingRingJob = null
+        CallRinger.stop()
     }
 
     fun sendTypingStarted() {

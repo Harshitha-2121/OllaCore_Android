@@ -15,6 +15,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Incoming-call rings: vibration pattern while ringing. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Data-only call pushes must launch the ring UI over the lock screen (Android 14+ gates this permission). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:name=".OllacoreApp"
@@ -73,6 +78,13 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+
+        <!-- Keeps a live call alive while backgrounded; types match what the
+             call actually uses (mic+camera, +mediaProjection during share). -->
+        <service
+            android:name=".ui.call.CallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera|mediaProjection" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

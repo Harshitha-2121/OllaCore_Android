@@ -338,6 +338,9 @@ private fun dateLine(entry: CallLogEntry): String {
     val detail = when {
         entry.status == CallStatus.MISSED -> "Missed"
         entry.status == CallStatus.CANCELLED -> "Cancelled"
+        entry.status == CallStatus.BUSY -> "Busy"
+        entry.status == CallStatus.DECLINED -> "Declined"
+        entry.status == CallStatus.FAILED -> "Failed"
         entry.status == CallStatus.COMPLETED && entry.durationSec > 0 -> formatDuration(entry.durationSec)
         else -> ""
     }

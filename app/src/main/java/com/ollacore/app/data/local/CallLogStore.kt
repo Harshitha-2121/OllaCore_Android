@@ -21,7 +21,28 @@ private val Context.localStore by preferencesDataStore(name = "ollacore_local")
 enum class CallDirection { OUTGOING, INCOMING }
 
 @Serializable
-enum class CallStatus { COMPLETED, MISSED, CANCELLED, DECLINED, FAILED }
+enum class CallStatus { COMPLETED, MISSED, CANCELLED, DECLINED, BUSY, FAILED }
+
+/**
+ * Why the call ended (persisted with each record; stable machine-readable
+ * strings, never user content). Old records decode with "" (pre-existing data).
+ */
+object CallEndReason {
+    const val COMPLETED = "completed"
+    const val LOCAL_END = "local_end"
+    const val REMOTE_END = "remote_end"
+    const val DECLINED = "declined"
+    const val REMOTE_DECLINED = "remote_declined"
+    const val BUSY = "busy"
+    const val NO_ANSWER = "no_answer"
+    const val TIMEOUT = "timeout"
+    const val ICE_FAILED = "ice_failed"
+    const val SIGNALING_LOST = "signaling_lost"
+    const val AUTH_FAILED = "auth_failed"
+    const val JOIN_FAILED = "join_failed"
+    const val MEDIA_ERROR = "media_error"
+    const val ABORTED = "aborted"
+}
 
 @Serializable
 data class CallLogEntry(
@@ -32,7 +53,18 @@ data class CallLogEntry(
     val audioOnly: Boolean? = null,
     val startedAt: Long = 0L,
     val durationSec: Long = 0L,
-    val status: CallStatus = CallStatus.COMPLETED
+    val status: CallStatus = CallStatus.COMPLETED,
+    // Extended record (v2): defaults keep pre-existing JSON entries decoding.
+    val callId: String = "",
+    /** Local user id when known (self = caller for outgoing, self = callee for incoming). */
+    val callerId: String = "",
+    val calleeId: String = "",
+    /** Epoch ms the media path came up (0 = never answered/connected). */
+    val answeredAt: Long = 0L,
+    /** Epoch ms the call finished (ended/failed/missed). */
+    val endedAt: Long = 0L,
+    /** Machine-readable end reason, see [CallEndReason]. */
+    val endedReason: String = ""
 )
 
 class CallLogStore(private val context: Context) {

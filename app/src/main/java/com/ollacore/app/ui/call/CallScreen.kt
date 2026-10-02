@@ -65,7 +65,9 @@ fun CallScreen(
                 onAccept = onAccept,
                 onDecline = onDecline
             )
-            CallPhase.ENDED -> CallEndedUi(error = uiState.error, onClose = onEndCall)
+            CallPhase.ENDED, CallPhase.DECLINED, CallPhase.BUSY,
+            CallPhase.FAILED, CallPhase.MISSED ->
+                CallEndedUi(phase = uiState.phase, error = uiState.error, onClose = onEndCall)
             else -> {
                 if (uiState.audioOnly) {
                     VoiceCallUi(
@@ -73,6 +75,8 @@ fun CallScreen(
                         phase = uiState.phase,
                         isMuted = uiState.isMuted,
                         isSpeakerOn = uiState.isSpeakerOn,
+                        elapsedSec = uiState.elapsedSec,
+                        quality = uiState.quality,
                         error = uiState.error,
                         onToggleMute = onToggleMute,
                         onToggleSpeaker = onToggleSpeaker,
@@ -104,12 +108,42 @@ fun CallScreen(
 
 // ── Voice call: avatar + phase + mute/speaker/end ─────────────────────
 
+/** Status line under the peer name (duration once media is up). */
+private fun phaseLabel(phase: CallPhase, peerName: String? = null): String = when (phase) {
+    CallPhase.CALLING -> "Calling…"
+    CallPhase.RINGING -> if (peerName != null) "Ringing $peerName…" else "Ringing…"
+    CallPhase.CONNECTING -> "Connecting…"
+    CallPhase.RECONNECTING -> "Reconnecting…"
+    else -> ""
+}
+
+/** "00:07" once connected (elapsedSec = 0 shows plain Connected). */
+private fun statusLabel(phase: CallPhase, elapsedSec: Long): String = when {
+    phase == CallPhase.CONNECTED && elapsedSec > 0L -> formatCallDuration(elapsedSec)
+    phase == CallPhase.CONNECTED -> "Connected"
+    else -> phaseLabel(phase)
+}
+
+@Composable
+private fun QualityBanner(quality: CallQualityLevel, modifier: Modifier = Modifier) {
+    if (quality == CallQualityLevel.POOR) {
+        Text(
+            "Poor connection…",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFFFFC444),
+            modifier = modifier
+        )
+    }
+}
+
 @Composable
 private fun VoiceCallUi(
     peerName: String,
     phase: CallPhase,
     isMuted: Boolean,
     isSpeakerOn: Boolean,
+    elapsedSec: Long,
+    quality: CallQualityLevel,
     error: String?,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
@@ -139,16 +173,11 @@ private fun VoiceCallUi(
         Text(peerName, style = MaterialTheme.typography.headlineSmall, color = Color.White)
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            when (phase) {
-                CallPhase.OUTGOING -> "Connecting…"
-                CallPhase.RINGING -> "Ringing…"
-                CallPhase.CONNECTING -> "Connecting…"
-                CallPhase.CONNECTED -> "Connected"
-                else -> ""
-            },
+            statusLabel(phase, elapsedSec),
             style = MaterialTheme.typography.bodyMedium,
             color = Color.White.copy(alpha = 0.7f)
         )
+        QualityBanner(quality, Modifier.padding(top = 4.dp))
         error?.let {
             Spacer(modifier = Modifier.height(8.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -208,16 +237,19 @@ private fun VideoCallUi(
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        when (uiState.phase) {
-                            CallPhase.OUTGOING -> "Connecting…"
-                            CallPhase.RINGING -> "Ringing $peerName…"
-                            CallPhase.CONNECTING -> "Connecting…"
+                        when {
+                            uiState.phase == CallPhase.CONNECTED ->
+                                statusLabel(uiState.phase, uiState.elapsedSec)
+                            uiState.phase.isRinging || uiState.phase == CallPhase.CONNECTING ||
+                                uiState.phase == CallPhase.RECONNECTING ->
+                                phaseLabel(uiState.phase, peerName)
                             else -> peerName
                         },
                         color = Color.White
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    QualityBanner(uiState.quality, Modifier.padding(top = 12.dp))
                 }
             }
         } else if (remoteVideos.size == 1) {
@@ -260,6 +292,10 @@ private fun VideoCallUi(
         uiState.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp))
         }
+        QualityBanner(
+            uiState.quality,
+            Modifier.align(Alignment.TopCenter).padding(top = if (uiState.error != null) 84.dp else 56.dp)
+        )
 
         // Controls (auto-hidden; any tap brings them back).
         androidx.compose.animation.AnimatedVisibility(
@@ -351,18 +387,41 @@ private fun IncomingCallUi(peerName: String, audioOnly: Boolean, onAccept: () ->
 }
 
 @Composable
-private fun CallEndedUi(error: String?, onClose: () -> Unit) {
+private fun CallEndedUi(phase: CallPhase, error: String?, onClose: () -> Unit) {
+    val title = when (phase) {
+        CallPhase.DECLINED -> "Call declined"
+        CallPhase.BUSY -> "Busy"
+        CallPhase.MISSED -> "Missed call"
+        CallPhase.FAILED -> "Call failed"
+        else -> "Call ended"
+    }
+    val subtitle = when {
+        phase == CallPhase.BUSY -> "They're on another call"
+        phase == CallPhase.MISSED && error == null -> "No answer"
+        else -> error
+    }
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Icon(Icons.Default.CallEnd, contentDescription = null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(48.dp))
+        Icon(
+            if (phase == CallPhase.MISSED) Icons.Default.PhoneMissed else Icons.Default.CallEnd,
+            contentDescription = null,
+            tint = if (phase == CallPhase.FAILED || phase == CallPhase.DECLINED)
+                MaterialTheme.colorScheme.error else Color.White.copy(alpha = 0.6f),
+            modifier = Modifier.size(48.dp)
+        )
         Spacer(modifier = Modifier.height(12.dp))
-        Text("Call ended", color = Color.White, style = MaterialTheme.typography.headlineSmall)
-        error?.let {
+        Text(title, color = Color.White, style = MaterialTheme.typography.headlineSmall)
+        subtitle?.let {
             Spacer(modifier = Modifier.height(8.dp))
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            Text(
+                it,
+                color = if (phase == CallPhase.FAILED) MaterialTheme.colorScheme.error
+                else Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.bodySmall
+            )
         }
         Spacer(modifier = Modifier.height(24.dp))
         Button(onClick = onClose) { Text("Close") }
