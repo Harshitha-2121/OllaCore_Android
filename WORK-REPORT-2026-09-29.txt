@@ -1,0 +1,212 @@
+================================================================
+WORK DONE REPORT - Tuesday, September 29, 2026 (9:30 AM - midnight IST)
+Project: OllaCore Android app (Harshitha-2121/OllaCore_Android)
+Window : 2026-09-29 09:30 -> 2026-09-30 00:00 IST
+Repo   : https://github.com/Harshitha-2121/OllaCore_Android
+Branch : main
+================================================================
+
+TIMELINE AT A GLANCE
+---------------------
+10:44  a1acaab  Chat block: preserve pre-block history
+10:51  de15e5f  Repo cleanup: debug dumps + local reports removed
+11:01  57b8d03  Reports kept local-only via .gitignore
+12:20  fac0c06  Backend spec restored + BlockFilter edge-case tests
+19:06  5e9be51  Contact Info reference rebuild (164 tests green)
+19:49+  evening  Appearance -> Chat Theme system built (parallel session)
+23:03  night    Group Info module work in progress
+---- midnight cutoff ------------------------------------------------
+00:16  5cc8a12  Group Info module committed (carry-over from 23:03)
+00:18  2b1ad2c  Chat Theme system committed (184 tests green)
+00:18  28300ce  Group add-members wiring committed
+(All commits above are already pushed to origin/main.)
+
+================================================================
+1. CHAT BLOCK - PRESERVE PRE-BLOCK HISTORY (10:44 AM, a1acaab)
+================================================================
+- Bug: blocking a contact wiped/hid the ENTIRE shared history, not
+  just messages sent after the block.
+- Root cause: block visibility had no time dimension - it was
+  "sender blocked => hide every message from sender".
+- Fixes:
+  a. ChatPrefsStore: per-user block-event timestamps stored in
+     blocked_at_json; re-blocking the same user overwrites the
+     cutoff (new block hides from the new cutoff onward).
+  b. New BlockFilter.kt (pure JVM logic, testable without Android):
+     - messageCreatedAtMs(): parses server instants (ISO-8601 or
+       epoch seconds/millis strings) to epoch ms.
+     - blockedMessageHidden(): a message is hidden ONLY when its
+       sender is currently blocked AND the message was created at
+       after that sender's block event. Pre-block history, other
+       senders, and unblocked periods stay visible.
+     - Unknown/unparseable timestamps FAIL CLOSED (hidden while
+       blocked) - safe default, no accidental leak.
+  c. ChatViewModel: blockedAtCache + isBlockedMessage() applied to
+     the live-message path, history-load path, and the in-memory
+     filter; legacy blocks (no stored timestamp) backfilled; block
+     toggle no longer clears local history.
+- Files: ChatPrefsStore.kt (+33), BlockFilter.kt (new, +43),
+  ChatViewModel.kt (+40 / -8).
+
+================================================================
+2. REPO CLEANUP - DEBUG DUMPS AND LOCAL REPORTS (10:51, de15e5f)
+================================================================
+- Removed from git tracking (17 files, -2594 lines):
+  - ollacore_anr.txt (39 MB) and ollacore_startup_anr.txt (6.4 MB)
+    binary ANR dumps,
+  - 14 local report/spec/QA docs (QA-EXECUTION-REPORT, TEST-CASES,
+    TESTING-REPORT, QA_TEST_MATRIX_104.csv, OLLACORE-API-REPORT,
+    SESSION-REPORT-8H, 8H-ACHIEVEMENT-SNAPSHOT, WORK-REPORT-2026-09-28,
+    DOCUMENTATION-COVERAGE, PROJECT-FEATURES-PIN-TO-PIN, etc.).
+- Kept README.md + ARCHITECTURE.md as the project's tracked docs.
+- .gitignore extended: ollacore_*.txt, WORK-REPORT-*.txt,
+  SESSION-REPORT-*.txt, *ACHIEVEMENT-SNAPSHOT.txt.
+
+================================================================
+3. REPORT DUMPS STAY LOCAL-ONLY (11:01, 57b8d03)
+================================================================
+- Follow-up .gitignore pass (+14 lines) so every restored local
+  report/dump stays untracked: GitHub repo keeps only source,
+  tests, README, ARCHITECTURE and (deliberately) the backend spec.
+- Files remain on disk for the user; they are simply not committed.
+
+================================================================
+4. BACKEND SPEC RESTORED + BLOCK-FILTER TESTS (12:20, fac0c06)
+================================================================
+- OLLACORE-BACKEND-SPEC.txt re-tracked in git: multiple in-app
+  dialogs reference it, so shipping the app without the spec in the
+  repo made those references dangle. (.gitignore adjusted for it.)
+- New BlockFilterTest.kt (72 lines, 8 tests) - edge cases:
+  - ISO-8601 and epoch (s/ms) timestamp parsing,
+  - pre-block message visible, post-block message hidden,
+  - legacy block with unknown timestamp fails closed,
+  - non-blocked sender always visible, unparseable timestamps,
+  - re-block cutoff overwrite.
+- Full suite green after this commit.
+
+================================================================
+5. CONTACT INFO REFERENCE REBUILD (7:06 PM, 5e9be51)
+================================================================
+Largest single change of the day: 10 files, +1536 / -115 lines.
+- ContactInfoScreen.kt (+593): rebuilt to the reference layout -
+  screenshot-ordered scroll (photo -> name/number -> actions ->
+  About -> lists -> shared media), About section, "groups in
+  common" row, favourites + lists workflow, clear/block/report/
+  delete actions.
+- ContactListsUi.kt (new, +200): reusable favourites/list
+  selector rows (add to favourites toggle, add to list with
+  create-new), shared with Group Info later the same night.
+- MediaBrowser.kt (new, +249): shared-media grid for a chat
+  (images/videos/docs with thumbnails), opened from Contact Info.
+- StarredMessages.kt + StarredMessagesScreen.kt (new, +258):
+  starred-message list with sender/timestamp/preview and
+  deep-scroll navigation to the original message in the chat.
+- ContactInfoViewModel.kt (+198): section loaders (lists, starred,
+  media scan), action methods (favourite/list/clear/block/report/
+  delete) with loading/error states.
+- ChatScreen.kt (+17): support for chat deep-scroll to a message
+  (route chat/{roomId}?scrollTo={messageId}).
+- MainActivity.kt (+72): new routes wired (media browser, starred,
+  contact actions).
+- OllacoreDesign.kt (+6): small design-token additions.
+- ContactInfoUiTest.kt (new, +58): 4 tests for the pure UI logic.
+- Commit note: 164 unit tests green at this commit.
+
+================================================================
+6. EVENING - APPEARANCE -> CHAT THEME SYSTEM (parallel session)
+================================================================
+Built roughly 19:49 - 20:19 (files created during the window;
+committed 00:18 as 2b1ad2c once the compile error in
+AppearanceScreen.kt was fixed - see carry-over).
+- data/model/ChatTheme.kt (new, 269 lines): chat-theme catalog
+  (12+ themes: default_dark, dark_purple, dark_blue, ocean_blue,
+  nature_sky, dark_leaves, black_abstract, ...), bubble/wallpaper/
+  text color tokens, resolveChatStyle() with custom overrides,
+  pickTextOn() contrast fallback, bubbleShapes() corner helpers.
+- data/local/ChatThemeStore.kt (new, 150 lines): DataStore
+  persistence for the selected theme + custom overrides
+  (outgoing/incoming bubble, text mode, opacity, corner).
+- ui/appearance/ package (10 new files):
+  AppearanceScreen (entry + app icon picker), ChatThemeScreen
+  (378 lines - theme catalog grid), WallpaperScreen, BubbleScreen
+  (183 lines - bubble color/opacity/corner customization),
+  AiTheme (118 lines - deterministic AI draft from a text prompt),
+  AppIcon (launcher-icon switching via activity-alias),
+  AppearanceFlow/AppearanceState/ChatWallpaperView helpers.
+- ChatScreen.kt: bubbles + wallpaper now follow the selected chat
+  theme through a CompositionLocal (LocalChatTheme) with the app
+  scheme as fallback; footer text follows bubble color.
+- AndroidManifest.xml: two launcher activity-aliases
+  (LauncherSunset, LauncherOcean) + ic_launcher_sunset/ocean
+  drawables; AppIcon enables/disables them at runtime.
+- ChatThemeTest.kt (new): 8 tests (catalog uniqueness/coverage,
+  fallback lookup, override clamping, auto text contrast, forced
+  text modes, bubble corner shapes, AI determinism).
+- Result: committed as 2b1ad2c at 00:18, "184 tests green".
+
+================================================================
+7. LATE NIGHT - GROUP INFO MODULE STARTED (23:03, in window)
+================================================================
+- Work on the complete Group Chat / Group Info module (57-section
+  spec; the promised reference video never arrived, so the text
+  spec was the source of truth) was in progress during the late
+  evening - GroupInfoScreen.kt last edited 23:03 within this
+  window.
+- Scope written: group header (image/name/member count), Voice /
+  Video / Add / Search action row, media-links-docs row with real
+  thumbnails, starred messages, notification mute, encryption
+  (real e2ee state), advanced privacy, similar-group flow, member
+  section with search + Add member, add-member screen with
+  checkbox selection and "Already added to group" state, member
+  changes event log, favourites/lists/clear/exit/report actions,
+  confirmation dialogs, permission-aware admin controls.
+- Completion landed just after midnight (see carry-over below).
+
+================================================================
+8. CARRY-OVER PAST MIDNIGHT (00:01 - 00:18, for reference)
+================================================================
+- ChatThemeTest.kt compile fix (toPx now takes a geometry Size).
+- 5cc8a12 (00:16) - Group Info module committed: 10 files,
+  +1797 / -219 (GroupInfoScreen rewrite ~1147 lines,
+  GroupInfoViewModel extension, GroupAddMembersScreen new,
+  SharedMediaScan new shared helper, GroupEventStore new,
+  NewGroupViewModel prefill for similar group, MainActivity
+  navigation wiring, GroupMembersTest new with 4 tests).
+- 2b1ad2c (00:18) - Chat Theme system committed.
+- 28300ce (00:18) - remaining AppContainer group wiring.
+- All three pushed; origin/main = 28300ce, working tree clean.
+
+================================================================
+9. TEST STATUS
+================================================================
+- At 19:06 (5e9be51): 164 unit tests green, 0 failures.
+- End of night (after carry-over commits): 184 unit tests,
+  18 test classes, 0 failures, 0 errors, BUILD SUCCESSFUL
+  (verified with :app:assembleDebug + :app:testDebugUnitTest).
+- Biggest suites: MimeValidatorTest 37, ForwardSecrecyManagerTest
+  26, ContactRowsTest 21, MlsMessageHandlerTest 19, ChatThemeTest
+  8, BlockFilterTest 8, RtcFrameParseTest 8, ErrorMessagesTest 8.
+
+================================================================
+10. GIT / GITHUB STATUS
+================================================================
+- In-window commits (all pushed): a1acaab, de15e5f, 57b8d03,
+  fac0c06, 5e9be51.
+- Carry-over commits (pushed): 5cc8a12, 2b1ad2c, 28300ce.
+- origin/main HEAD: 28300ce. No secrets in any commit (secret scan
+  run before each push; local.properties stays git-ignored).
+
+================================================================
+11. OPEN ITEMS AT MIDNIGHT
+================================================================
+- Group module: built and committed, NOT yet installed/visually
+  QA'd on a device (phone was locked); full flow walk-through
+  (spec section 55) pending.
+- Reference video for the group task never received; implementation
+  follows the written 57-section spec.
+- Backend gaps remain spec'd in OLLACORE-BACKEND-SPEC.txt
+  (broadcast lists, payments, read-all, voice attachment linkage,
+  URL TTL, communities/channels, group calls, report endpoint) -
+  honest UI states, no fake success paths.
+================================================================
+END OF REPORT

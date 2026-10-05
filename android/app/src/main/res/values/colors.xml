@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="olla_blue">#FF008069</color>
+    <color name="olla_blue_dark">#FF005C4B</color>
+    <color name="olla_green">#FF00A884</color>
+    <color name="olla_red">#FFF15C6D</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="black">#FF000000</color>
+</resources>

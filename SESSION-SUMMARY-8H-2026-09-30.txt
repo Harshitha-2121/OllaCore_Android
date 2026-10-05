@@ -1,0 +1,223 @@
+OLLACORE ANDROID - FULL-DAY WORK SUMMARY (MERGED SNAPSHOT)
+==========================================================
+Windows : (early) 2026-09-30 ~00:00 -> ~13:30 IST  [this session]
+          (later) 2026-09-30 ~10:15 -> 18:15 IST  [WORK-REPORT-2026-09-30.txt]
+Project : OllaCore Android app (Harshitha-2121/OllaCore_Android)
+Repos   : origin (Harshitha-2121) + networkers-home
+          (Networker-s-Home/OllaCore_Android) - main, in sync
+Branch  : main
+HEAD    : 0adedc2 (origin/main = 0adedc2, pushed) - tree clean
+Device  : 172.16.70.42:5555 (sdk_gphone64_x86_64 emulator, WiFi ADB)
+Merged  : 2026-09-30 (this file merges SESSION-SUMMARY-8H + WORK-REPORT-2026-09-30,
+          duplicates removed; prior windows live in WORK-REPORT-2026-09-29.txt)
+Updated : 2026-09-30 evening - emulator disconnect/offline fix appended
+          as section 10; section 9 next steps refreshed.
+================================================================
+
+TIMELINE AT A GLANCE
+---------------------
+(early)       Block-visibility commit a1acaab -> pushed to BOTH remotes
+(early)       Repo cleanup de15e5f (16 files, ~46 MB) + local-only
+              restore 57b8d03 -> pushed to BOTH remotes
+(early)       Device pipeline recovery (pm stall, manifest fix, installs)
+(early)       Adaptive Default chat theme + add-member tap fix (code+tests)
+(morning)     Rebrand investigation: pink/purple inventory, UxKit located
+(morning)     Full WhatsApp-Web teal-green rebrand (11 files)
+12:47  67a00e3  Pending increments committed: adaptive Default theme,
+                self-admin roster fix, launcher alias targetActivity
+12:51  0adedc2  WhatsApp-Web teal-green UI rebrand committed
+              Both commits PUSHED to origin/main
+(after)       Build gate: 188 tests / 18 suites green, APK rebuilt
+(after)       On-device install + visual QA via screenshots (all MATCH)
+(afternoon)   scrcpy/adb stale-channel diagnosis + workaround
+(18:15)       WORK-REPORT-2026-09-30 generated - tree clean
+
+================================================================
+1. EARLY COMMITS + DUAL-REMOTE SYNC (unique to early window)
+================================================================
+a1acaab  Chat block: preserve pre-block history, hide only post-block msgs
+         - ChatPrefsStore.kt: per-user block-event timestamps (blocked_at_json)
+         - NEW BlockFilter.kt: pure timestamp-aware visibility (server
+           instants vs block event, fail-closed on unknown timestamps)
+         - ChatViewModel.kt: blockedAtCache + isBlockedMessage() in live /
+           history / filter paths, legacy-block backfill
+         - networkers-home remote added; pushed to BOTH remotes
+de15e5f  Repo cleanup: deleted 16 files (~46 MB: 39 MB ollacore_anr.txt +
+         6.4 MB ollacore_startup_anr.txt + 14 report docs); kept README +
+         ARCHITECTURE; .gitignore now covers ollacore_*.txt,
+         WORK-REPORT-*.txt, SESSION-REPORT-*.txt,
+         *ACHIEVEMENT-SNAPSHOT.txt. Pushed to BOTH remotes.
+57b8d03  Restored the 16 files locally as ignored (all verified on-disk +
+         ignored); GitHub tracks only README + ARCHITECTURE. Pushed both.
+
+================================================================
+2. DEVICE PIPELINE RECOVERY (early window)
+================================================================
+- `pm list packages` / `adb install` hung (package-manager stall).
+  Fixed with `adb reboot`; pm responsive after.
+- Install then failed INSTALL_PARSE_FAILED_MANIFEST_MALFORMED: launcher
+  aliases .LauncherSunset/.LauncherOcean missed android:targetActivity.
+  Fixed (targetActivity=".MainActivity") - later committed in 67a00e3.
+- 70 MB streamed installs die on the ~0.1 MB/s link (empty
+  `failed to install:`). Reliable procedure: `adb push` APK -> `cp` to
+  /data/local/tmp (pm cannot read /sdcard, SELinux denial) -> `pm install
+  -r` -> Success. Always verify size (one "Success" reinstalled stale).
+- scrcpy black window (early): stale on-device server after reboot.
+  Kill + relaunch fixed it; screenshots confirmed rendering fine.
+
+================================================================
+3. ADAPTIVE DEFAULT THEME + ADD-MEMBER FIX (early code, landed 67a00e3)
+================================================================
+Committed 12:47 as 67a00e3 (9 files, +131/-20), pushed. Detail kept
+here because the later report lists it only by title:
+- Chat theme: NEW defaultLight twin + defaultFor(dark) + isDefaultId;
+  ChatThemeStore exposes raw `custom` flow; rememberChatStyle resolves
+  Default via new LocalAppDark (MainActivity provides effectiveDark);
+  Default card previews adaptively, id preserved. Explicit themes
+  pixel-identical. Verified on device: dark doodle wallpaper, dark
+  incoming, green outgoing, no lavender.
+- Add-member taps: row clickable + Checkbox were correctly wired but
+  disabled by canAdd=isAdmin=false (banner proved it); roster carries
+  no roles/names/phones and uiState.selfId was never set. Gates now
+  depend on alreadyMember+busy only (Malavika row stays dead);
+  confirmAddMembers lets the server enforce (per-row addErrors+retry);
+  tolerant isSelfAdmin (id-or-phone, admin/owner/creator) + selfId
+  stored in state.
+- Tests: ChatThemeTest 9/9 (1 new), GroupMembersTest 7/7 (3 new).
+
+================================================================
+4. REBRAND GOAL + INVESTIGATION (later window, new content)
+================================================================
+GOAL: re-skin the app to the attached WhatsApp Web dark-theme
+screenshot (teal-green on near-black), end to end, then build, test,
+push and verify on device against the reference.
+- Confirmed @color/ olla_* values were dead code (no references).
+- Located UxKit.kt (BrandGradient line 144, chip line 226).
+- Full pink/purple hardcode inventory: Theme.kt, OllacoreDesign.kt,
+  ChatScreen READ tick (ReadPink), AttachmentPicker icons,
+  MessageContextMenu popup, ChatThemeScreen AI card, appModeColor
+  swatches, colors.xml, pink strings in SettingsRoot /
+  PrivacySecurity / ChatViewModel comments.
+- Verified NO test asserts Material scheme colors -> rewrite test-safe.
+
+================================================================
+5. REBRAND IMPLEMENTATION (commit 0adedc2, 11 files, +108/-106)
+================================================================
+Palette (WhatsApp Web reference):
+  Dark : bg #0B141A, surface #111B21, elevated #202C33,
+         hover/outline #2A3942, primary #00A884, secondary #25D366,
+         tertiary/links #53BDEB, text #E9EDEF, muted #8696A0,
+         error #F15C6D, primaryContainer #0B3B2E / onPrimary #D9FDD3
+  Light: bg/panel #F0F2F5, surface #FFFFFF, primary #008069,
+         secondary #00796B, tertiary #027EB5, text #111B21,
+         muted #667781, outline #DDE3E8, primaryContainer #D9FDD3,
+         error #D32F2F
+- Theme.kt: both brand schemes rewritten (+ explicit error containers).
+- OllacoreDesign.kt: BrandGradient/SplashGradient/HeroWash -> teal;
+  AvatarSolids -> green/blue family; OwnBubble Light/Dark ->
+  #D9FDD3/#CFF5DF and #005C4B/#00795F; ReadPink removed, ReadBlue kept;
+  OllaPink/OllaBlue/OllaViolet retargeted.
+- ChatScreen.kt: ReadPink -> ReadBlue (#53BDEB double-tick); "Delete for
+  everyone" -> colorScheme.error; pink KDoc wording -> red.
+- AttachmentPicker.kt: icon tiles -> teal/green/blue family.
+- MessageContextMenu.kt: PopupCard -> #202C33, PopupDanger -> #F15C6D.
+- AppearanceScreen.kt: appModeColor swatches -> palette family.
+- ChatThemeScreen.kt: AI card gradient -> dark-teal.
+- SettingsRoot.kt: "Pink theme" -> "Green theme".
+- PrivacySecurityScreen.kt: "pink ticks" -> "blue ticks".
+- ChatViewModel.kt: tick comment updated. colors.xml realigned
+  (still unreferenced).
+Kept deliberately: call-screen red, home badge, selected-row green
+tint, theme-catalog swatches, INK_DARK assertion, no WA branding.
+
+================================================================
+6. BUILD + TEST GATE (merged tally)
+================================================================
+Command : .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug
+Result  : BUILD SUCCESSFUL (incl. double run pre/post final edits)
+Tests   : 188 tests / 18 suites, 0 failures, 0 errors (13.6s)
+          (baseline 184; +4 = adaptive-default test + 3 isSelfAdmin;
+          subsets seen green earlier: ChatThemeTest 9/9,
+          GroupMembersTest 7/7)
+APK     : app/build/outputs/apk/debug/app-debug.apk, 69,905,816 bytes
+Secrets : diff scanned (api_key/secret/password/Bearer/token) -> clean
+Lint    : no ktlint/detekt/spotless - tests + build are the gate
+
+================================================================
+7. DEVICE QA (merged)
+================================================================
+Rebrand APK installed on 172.16.70.42:5555, screenshot-verified:
+- Home/chat list: near-black teal bg, #111B21 cards, green/blue
+  avatars, green FAB, dark-green Chats pill ............ MATCHES
+- Chat screen: green outgoing, BLUE read ticks, doodle on #0B141A,
+  teal mic FAB + attachment icons ..................... MATCHES
+- Settings: teal icons, near-black bg ................. MATCHES
+- Group info: teal actions on near-black .............. MATCHES
+- Sign-in: teal-green logo gradient ................... MATCHES
+Install notes: streamed push over ~50-100 KB/s path kept failing;
+final install Success verified via lastUpdateTime + monkey relaunch.
+Fallback used once: local AVD Pixel_8_2 headless (install Success).
+
+================================================================
+8. SCRCPY / ADB TROUBLESHOOTING (merged)
+================================================================
+- Early: black window = stale on-device server after reboot; kill +
+  relaunch fixed it.
+- Later: pushes died at exactly 131072 bytes + `connect failed:
+  closed` (stale TCP channel, not a version mismatch - 1.0.41 both
+  ends, shell/pull traffic fine). Fix: `adb disconnect` ->
+  `adb connect` -> scrcpy back-to-back; 5/5 tiny pushes OK, full
+  733,706-byte scrcpy-server push OK with on-device size confirm.
+
+================================================================
+9. REPO STATE + NEXT STEPS
+================================================================
+HEAD    : 0adedc2 (origin/main = 0adedc2, pushed). Tree clean.
+Recent  : 0adedc2 rebrand (11 files)
+          67a00e3 adaptive Default + self-admin + aliases (9 files)
+          a1acaab / de15e5f / 57b8d03 (early window, both remotes)
+          28300ce / 2b1ad2c / 5cc8a12 (prior report)
+Next    : 1. scrcpy live visual review. 2. Light-theme visual pass
+          (only dark verified vs reference). 3. User-flagged pixel
+          deltas. 4. On-device tap verification of Add-member toggles
+          (+1 row checks + FAB Add (1), checkbox unchecks, Malavika
+          inert) once the rebrand APK with the fix is confirmed live.
+          Still valid: prefer USB ADB; backend gaps open
+          (participants carry no roles; group-leave DELETE 404).
+Sources : SESSION-SUMMARY-8H-2026-09-30.txt (early) +
+          android/WORK-REPORT-2026-09-30.txt (later) - merged here,
+          duplicates removed.
+================================================================
+10. EMULATOR DISCONNECT / "OFFLINE" FIX (evening update)
+================================================================
+Symptom: 172.16.70.42:5555 dropped suddenly all day; reconnects
+          reported `offline` / `not found`; bulk pushes died at random
+          byte counts; pm/settings/svc binder calls hung while `echo`
+          still worked.
+Root cause (two compounding issues, both proven live):
+1. TWO adb servers fighting: SDK platform-tools adb (v37.0.1,
+   PID 2816) + scrcpy-bundled adb (v37.0.0, PID 17028), plus a third
+   copy under Downloads/platform-tools. Version-mismatched servers
+   kill each other on startup and drop the device mid-task.
+2. Emulator system services wedging over uptime (same disease as the
+   morning pm stall): binder calls into system_server blocked while
+   trivial shell still answered.
+Fix applied + verified:
+- Both servers killed (graceful `kill-server`); ONE server now: SDK
+  adb (PID 8700, v37.0.1).
+- User env ADB set to the SDK adb so scrcpy uses the same binary
+  (takes effect in fresh terminals) - ends the server wars.
+- `adb reboot`: pm/settings/svc instantly responsive again.
+- Device anti-sleep stored: stay_on_while_plugged_in=3,
+  wifi_sleep_policy=2 (both read back OK).
+- NOTE: `adb reconnect` once dropped the device instead of reviving
+  it (recovered via disconnect/connect); prefer the ladder below.
+Recovery ladder (in order): `adb reconnect` (check devices after) ->
+`adb disconnect` + `adb connect` -> graceful `adb kill-server`
+(never force-kill; any adb command restarts one clean server) ->
+`adb reboot` (sure fix for hanging binder calls).
+Caveat: WiFi link still ~0.1 MB/s at peak hours - disconnects are
+fixed, 70 MB deploys still take ~10+ min (USB ADB recommended).
+================================================================
+END OF MERGED REPORT
+================================================================

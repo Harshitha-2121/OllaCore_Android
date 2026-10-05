@@ -1,0 +1,248 @@
+================================================================
+WORK SUMMARY - Thursday, October 01, 2026 (Today, full day)
+Project: OllaCore Android app (Harshitha-2121/OllaCore_Android)
+Branch : main
+Device : 172.16.70.42:5555 (sdk_gphone64_x86_64 emulator, WiFi ADB)
+Generated: 2026-10-01 (this file: Ollacore/WORK-REPORT-2026-10-01.txt)
+================================================================
+
+GOAL(S) OF THE DAY
+------------------
+A. Restyle the chat document/PDF message bubble to the attached
+   WhatsApp dark-theme reference (deep-green bubble, shaded doc card,
+   red PDF icon, "size - TYPE" meta, caption below, footer intact).
+B. Execute the 39-section WhatsApp-UX specification: audit the whole
+   app, close every feasible gap with REAL functionality (no mocks),
+   keep the existing teal-green brand theme, build + test + verify
+   every new flow on the device with screenshots.
+
+ TIMELINE AT A GLANCE
+---------------------
+- PDF/doc bubble restyle implemented (DocumentBubbleContent rewrite)
+- First build failed (compositeOver missing) -> manual blend fix
+- Build green, 188/188 tests green, APK installed, doc bubble
+  screenshot-verified in Malavika thread
+- Caption==filename duplicate spotted -> one-line dedupe fix
+- Rebuilt, reinstalled, re-verified (duplicate gone)
+- Full project audit via parallel subagents (nav/home/menu/search
+  + groups/settings/chat/design-system reports)
+- Gap matrix built; implementation in spec phase order:
+  search scrollTo, Read-all, global Starred, Archived screen,
+  swipe-to-archive, Community intro, Broadcast lists, Payments
+- Build green, 188/188 green, deployed, on-device QA per flow
+- Bottom-sheet nav-bar bug found by QA (Create button behind system
+  nav) -> header-action redesign, verified working
+- Broadcast list created + deleted live on device (persistence proven)
+
+================================================================
+1. PDF / DOCUMENT BUBBLE RESTYLE (reference screenshot)
+================================================================
+File: app/src/main/java/com/ollacore/app/ui/chat/ChatScreen.kt
+- DocumentBubbleContent rewritten (presentation only, zero behavior
+  change): card = slightly distinct shade of the host bubble via new
+  pure cardShade() helper (lifts darks ~10%, deepens lights);
+  red PDF tile (#F15C6D, palette red) with white icon, theme-tinted
+  tile for other types; filename semibold; meta line changed from raw
+  mime ("application/pdf ...") to reference pattern "10.7 KB - TXT"
+  via new shortDocType() (PDF/DOC/XLS/PPT/ZIP/TXT/...); caption now
+  renders BELOW the card inside the same bubble (was dropped before);
+  duplicate suppressed when caption == filename; tap-to-viewer,
+  download button, "Prepare download", timestamp + ticks preserved.
+- Call site passes caption (guarded against filename-fallback dupes).
+- Verified on device (Malavika thread): lighter-green card on deep
+  green bubble, "Meeting Platform report.txt / 10.7 KB - TXT",
+  caption dedupe confirmed in second screenshot. Dark incoming,
+  header, wallpaper, composer already matched the reference.
+- NOTE: no PDF message exists on the device (only TXT), so the RED
+  tile branch is code-verified (isPdf path) but not screenshot-proven.
+
+================================================================
+2. PROJECT AUDIT (Phase 1, read-only subagents)
+================================================================
+Audited: 24 nav routes, home/search/filters/archived/FAB/bottom-nav,
+chat overflow menu (all real incl. mute/disappearing/lists/call-link),
+in-chat + global search (8 tabs), New Group 3-step flow, Group Info
+sections, Devices (real), per-room Starred (real), Settings/Profile/
+Appearance/Notifications/Privacy/Storage (mixed real + honest stubs),
+ALL chat features (reply/forward/delete/edit/react/star/select/typing/
+receipts = YES), UxKit/Theme/OllacoreDesign tokens, minimal animations,
+empty/loading/error/offline patterns.
+Pre-existing gaps found: in-chat search click dropped results; Read-all,
+global Starred, Archived screen, swipe gestures = stubs/missing;
+Community/Broadcast/Payments = honest notes, no screens.
+
+================================================================
+3. SEARCH RESULT -> JUMP TO MESSAGE (fixed, verified)
+================================================================
+- MainActivity in-chat search: onResultClick was popBackStack() only.
+  Now navigates chat/$roomId?scrollTo=$messageId (same mechanism the
+  starred flow already used; ChatScreen initial-scroll support exists).
+- GlobalSearchScreen: onOpenChat widened to (roomId, messageId?);
+  message hits pass hit.message.id, chat rows pass null.
+- Verified on device: searched "hlo" (2 results), tapped first hit,
+  chat opened scrolled straight to that bubble.
+
+================================================================
+4. READ ALL (real implementation, verified)
+================================================================
+- HomeViewModel.markAllRead(): unread rooms (cap 30) -> room token +
+  latest message id + markRead (same calls an opened chat makes),
+  progress state per room, Done(marked, failed), inbox reload so
+  badges/filters refresh; empty inbox -> Done(0,0) gracefully.
+- HomeScreen: overflow item wired (was a stub dialog), working
+  progress dialog, result dialog with counts, consume on OK.
+- Verified on device: "No unread chats - nothing to mark." dialog.
+  (Working-path with live unreads not tap-proven: no unreads on the
+  test account; fan-out code-reviewed + same-API-as-open-chat.)
+
+================================================================
+5. GLOBAL STARRED BROWSER (new, verified)
+================================================================
+- NEW ui/chat/StarredAllScreen.kt (VM + screen): rooms with local
+  star ids resolved against real history (token + 4x50 scan, max 12
+  rooms, per-room failures isolated), grouped by room, tap jumps to
+  message, unstar removes row live; loading/error/empty states.
+- Route "starredAll" + overflow wiring (was a stub dialog).
+- Verified on device: screen opens, correct empty state (account has
+  no stars). Jump/unstar share proven patterns.
+
+================================================================
+6. ARCHIVED SCREEN + SWIPE GESTURES (new, verified end-to-end)
+================================================================
+- NEW ui/home/ArchivedChatsScreen.kt: header + back, search filter,
+  count, rows with Unarchive action, empty + no-match states.
+- NEW shared SwipeableChatRow (SwipeToDismissBox, M3 1.3): swipe
+  right archives/unarchives then snaps back.
+- Home list rows wrapped; home "Archived (N)" header now navigates to
+  the screen (replaces inline expand); route "archived" reuses a fresh
+  HomeViewModel; HomeViewModel gained archiveChat/unarchiveChat.
+- Verified on device: swiped Malavika -> row left the list; Archived
+  screen showed 2 chats with search + unarchive buttons; unarchive
+  removed it (count 1); device left restored.
+
+================================================================
+7. COMMUNITY INTRO (new, verified)
+================================================================
+- NEW ui/communities/CommunityIntroScreen.kt: illustration, title,
+  description, Get started -> real newGroup flow (honestly labeled:
+  communities run on group chats until the backend service lands).
+- Routes communityIntro; both overflow + new-chat entry points wired
+  (toast stubs removed).
+- Verified on device: full screen renders correctly.
+
+================================================================
+8. BROADCAST LISTS (new architecture, verified end-to-end)
+================================================================
+- NEW data/local/BroadcastStore.kt (DataStore: id/name/memberIds,
+  create/delete, serializable) + registered in AppContainer.
+- NEW ui/broadcast/BroadcastsScreen.kt (VM + list screen + create
+  bottom sheet with name + contact search + multi-select): lists
+  persist locally and are fully manageable; Send opens an honest
+  note (no backend fan-out API exists - never faked).
+- Route "broadcasts" + overflow wiring (was a stub dialog).
+- Verified on device: created "QAteam" + 1 recipient (persisted,
+  row with Send/Delete), then deleted it (delete path proven).
+- REAL BUG FOUND BY THIS QA: sheet Create button sat behind the
+  system nav bar (window insets read zero inside bottom sheets
+  here). padding/spacer/weighted-list attempts had no effect, so the
+  primary action moved to a header "Create (N)" TextButton (always
+  reachable, standard pattern). Verified working.
+- Same nav-bar hardening applied to 4 sibling sheets
+  (AttachmentPicker, AiTheme, ChatOverflowMenu group-call,
+  ContactListsUi) via navigationBarsPadding.
+
+================================================================
+9. PAYMENTS INTEGRATION POINT (new, verified)
+================================================================
+- NEW ui/payments/PaymentsScreen.kt + PaymentsService interface
+  (providerName/isAvailable/initiatePayment - documented contract,
+  default backend: none). Screen states the integration point;
+  performs NO transaction.
+- Route "payments" + overflow wiring (was a stub dialog).
+- Verified on device: screen renders with honest copy.
+
+================================================================
+10. BUILD + TEST GATE
+================================================================
+- ./gradlew.bat :app:testDebugUnitTest :app:assembleDebug --offline
+- Result: BUILD SUCCESSFUL every run (one real compile error along
+  the way: compositeOver missing in this Compose version -> replaced
+  with manual channel blend; plus 4 import/enum/callback fixes).
+- Tests: 188 / 18 suites, 0 failures, 0 errors (final tally).
+- APK: app/build/outputs/apk/debug/app-debug.apk (~70.4 MB).
+- Deploy procedure (slow WiFi ADB): push -> size-verify -> cp to
+  /data/local/tmp (pm cannot read /sdcard, SELinux) -> pm install -r
+  -> force-stop -> monkey launch. Each deploy verified by size +
+  fresh pid + screenshot.
+- Secrets: no keys/tokens added; diff contains no secrets.
+
+================================================================
+11. KNOWN LIMITATIONS / HONEST GAPS
+================================================================
+- Red PDF tile branch code-verified, not screenshot-proven (no PDF
+  message on device).
+- Read-all Working-path with live unreads not tap-proven (no unreads
+  on test account).
+- Broadcast SEND, communities service, payments provider need
+  backend; all are isolated + labeled, nothing faked.
+- Bottom-sheet window insets read zero on this emulator, so sheet
+  primary actions avoid the sheet bottom by design (header action).
+- WiFi ADB ~0.1-1.5 MB/s with drops; 70 MB deploys take minutes;
+  USB ADB recommended (see EMULATOR-REPORT-2026-09-30.txt).
+
+================================================================
+12. REMAINING TODOS
+================================================================
+REMAINING TODOS - ALL DONE (late session)
+================================================================
+[x] Commit + push today's work to both remotes.
+    1db2da6 (18 files, +1338/-107) pushed to origin AND networkers-home.
+[x] Light-theme visual pass.
+    Forced-light build (TEMP, reverted after): home renders clean
+    (white cards, dark text, muted secondary, green accents, no
+    defects). Chat thread exposed one REAL finding: incoming bubbles
+    stayed dark because LocalAppDark (provided by MainActivity from
+    the stored DARK mode) disagreed with the forced-light scheme.
+    Forcing the provider false too proved the adaptive Default:
+    white incoming + dark text on light doodle wallpaper, green
+    outgoing intact. Both TEMP hacks reverted (tree clean), true dark
+    build reinstalled + re-verified. No code change needed: provider
+    and scheme derive from the same inputs in production.
+[x] Global-search message-hit jump tap-proof.
+    Searched "hlo" (2 hits in Malavika), tapped first hit -> chat
+    opened scrolled straight to that bubble. Verified by screenshot.
+[x] Pixel-level deltas against new reference material.
+    No new reference material was provided this session - nothing to
+    compare. (All prior screenshots already matched.)
+[x] Backend items (server-side by nature - audited, nothing fakeable
+    client-side, no code changes required):
+    - Broadcast fan-out / communities service / payments service:
+      correctly isolated + labeled (committed); nothing more possible
+      without the services.
+    - Participants roles: tolerant isSelfAdmin committed; roster still
+      carries no roles/names/phones (device-proven).
+    - Group-leave DELETE 404: leaveGroup/addMember/invite/icon paths
+      all surface backendHint errors honestly, no fake success.
+
+
+================================================================
+13. FILE INVENTORY (today)
+================================================================
+Modified: MainActivity.kt (5 routes, search fix, menu wiring),
+ HomeScreen.kt (menu, dialogs, swipe, archived entry),
+ HomeViewModel.kt (read-all, archive singles),
+ GlobalSearchScreen.kt (message-id callback),
+ ChatScreen.kt (doc bubble restyle),
+ BroadcastsScreen fixes, AttachmentPicker.kt, AiTheme.kt,
+ ChatOverflowMenu.kt, ContactListsUi.kt (insets),
+ AppContainer.kt (store registration).
+New: StarredAllScreen.kt, ArchivedChatsScreen.kt,
+ CommunityIntroScreen.kt, broadcast/BroadcastsScreen.kt,
+ data/local/BroadcastStore.kt, payments/PaymentsScreen.kt.
+Backend/API: none. Database: none (DataStore only).
+Design system: reused only, no new tokens (brand theme untouched).
+Build/run: ./gradlew.bat :app:testDebugUnitTest
+ :app:assembleDebug --offline, then install APK as in section 10.
+================================================================
+END OF REPORT
+================================================================

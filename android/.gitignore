@@ -1,0 +1,47 @@
+# Gradle build outputs
+.gradle/
+.kotlin/
+build/
+app/build/
+
+# Local machine config (SDK path, signing, test secrets) - never commit
+local.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Packaged outputs
+*.apk
+*.aab
+*.ap_
+
+# Misc
+*.hprof
+captures/
+compile_out.txt
+
+# Debug dumps + local work reports (never commit - bloat, local only)
+ollacore_*.txt
+WORK-REPORT-*.txt
+SESSION-REPORT-*.txt
+*ACHIEVEMENT-SNAPSHOT.txt
+
+# Local-only QA/report docs (kept on disk, removed from GitHub).
+# NOTE: OLLACORE-BACKEND-SPEC.txt is tracked - app dialogs reference it.
+ANDROID-QA-REPORT.md
+BuildingAndroidChatapp&TestingReport.txt
+DOCUMENTATION-COVERAGE.md
+OLLACORE-API-REPORT.txt
+PROJECT-FEATURES-PIN-TO-PIN.txt
+QA_TEST_MATRIX_104.csv
+QA-EXECUTION-REPORT.md
+QA-EXECUTION-REPORT.txt
+TEST-CASES.md
+TESTING-REPORT.txt

@@ -1,0 +1,94 @@
+OLLACORE - EMULATOR REPORT (172.16.70.42:5555)
+==================================================
+Generated : 2026-09-30 evening IST
+Device    : 172.16.70.42:5555
+            product=sdk_gphone64_x86_64, model=sdk_gphone64_x86_64,
+            device=emu64xa (remote emulator, WiFi ADB, port 5555)
+Account   : logged-in QA2 session (+15550002222,
+            user a8f85b84-4bfa-4edc-aff9-fca087d7c047)
+App       : com.ollacore.app.debug (+ .test), targetSdk 35
+================================================================
+
+LINK CHARACTERISTICS (measured all day)
+---------------------------------------
+- Throughput ......... ~0.1-0.2 MB/s (70 MB APK = 7-14 min)
+- Per-command overhead ~8 s (every adb invocation pays TCP setup)
+- ICMP ping .......... blocked (no reply; TCP/5555 is the probe)
+- Evenings worse ..... drops cluster late-day; mornings steadier
+- adbd restarts ...... observed all day (transport_id climbed
+  into the 80s); each restart drops in-flight transfers
+
+ISSUES SEEN (chronological)
+---------------------------
+1. Morning: `pm list packages` / `adb install` hung with no output.
+   Cause: package-manager stall on the emulator.
+   Fix: `adb reboot` -> pm instantly responsive. (Recurred in milder
+   form later as pm/settings/svc binder hangs while `echo` worked -
+   same system_server wedge disease; reboot is the sure fix.)
+2. Install failures with EMPTY reason (`failed to install: <blank>`).
+   Cause: 70 MB streamed install cannot survive the 0.1 MB/s link;
+   connection breaks mid-stream, installer reports nothing.
+   Fix (reliable procedure, used all session):
+     adb push app-debug.apk /sdcard/app-debug.apk
+     adb shell cp /sdcard/app-debug.apk /data/local/tmp/app-debug.apk
+     adb shell pm install -r /data/local/tmp/app-debug.apk
+   Notes: pm CANNOT read /sdcard (SELinux denial - use /data/local/tmp);
+   always verify byte size (one "Success" reinstalled a stale binary);
+   70 MB needs ~10 min of clean link - chunked 1 MB resume uploads
+   were trialled but the flapping link made them uneconomical.
+3. scrcpy black window. Cause: stale on-device scrcpy server after the
+   emulator reboot (frozen window). Fix: kill scrcpy processes, launch
+   fresh. Screenshots confirmed the device always rendered fine.
+4. scrcpy EOF pushes (`failed to read copy response`, pushes dying at
+   131072 bytes, `connect failed: closed`). Cause: stale TCP channel
+   to :5555, NOT a version mismatch (1.0.41 both ends, shell/pull
+   traffic fine). Fix: `adb disconnect` -> `adb connect` -> scrcpy
+   back-to-back; full 733,706-byte scrcpy-server push then verified OK.
+5. Sudden disconnects + `offline` / `not found` on reconnect (evening).
+   Root cause A: TWO adb servers fighting - SDK platform-tools adb
+   v37.0.1 (PID 2816) vs scrcpy-bundled adb v37.0.0 (PID 17028),
+   plus a third copy under Downloads/platform-tools. Mismatched
+   versions kill each other's server and drop the device mid-task.
+   Root cause B: system_server wedge (see 1).
+   Fix applied + verified:
+   - Both servers killed (graceful kill-server); ONE server now:
+     SDK adb v37.0.1 (PID 8700).
+   - User env ADB = SDK adb path, so scrcpy uses the same binary
+     (effective in fresh terminals). Ends the server wars.
+   - `adb reboot` cleared the wedge; pm/settings/svc responsive.
+   - Device anti-sleep stored: stay_on_while_plugged_in=3,
+     wifi_sleep_policy=2 (both read back OK).
+   - Caveat found: `adb reconnect` once dropped the device instead
+     of reviving it - always check `adb devices` after it.
+
+CURRENT STATE (as of this report)
+---------------------------------
+- Device `device` (online), single adb server (SDK 37.0.1, PID 8700)
+- pm responsive, stay-awake + wifi-never-sleep stored
+- App installed and running (last verified pid 8327; relaunch with
+  monkey -p com.ollacore.app.debug -c android.intent.category.LAUNCHER 1)
+- NOTE: a local `emulator-5554` appeared once in `adb devices` on this
+  PC - purpose unknown; always pass `-s 172.16.70.42:5555` explicitly
+  so commands never hit the wrong emulator.
+
+RECOVERY LADDER (use in this order)
+-----------------------------------
+1. `adb reconnect` ............ fast path (verify with devices after)
+2. `adb disconnect 172.16.70.42:5555` + `adb connect ...` (stale channel)
+3. `adb kill-server` ........... graceful; next adb command restarts
+   exactly one clean server (never force-kill the process)
+4. `adb reboot` ................ sure fix for hanging binder calls
+   (pm/settings/svc); device returns in ~1-2 min, data preserved
+
+RECOMMENDATIONS
+---------------
+1. Use USB ADB instead of WiFi for this device if possible (70 MB in
+   seconds instead of 10+ min; kills the whole failure class).
+2. Reboot the emulator at the start of a long session (prevents the
+   system_server wedge from accumulating).
+3. Keep ONE adb: SDK platform-tools everywhere; ADB env var already set.
+4. For big deploys: push -> size-verify -> cp to /data/local/tmp ->
+   pm install; never trust a bare streamed `adb install` on this link.
+================================================================
+END OF EMULATOR REPORT
+================================================================
