@@ -99,8 +99,13 @@ fun ChatScreen(
     onSearch: () -> Unit = {},
     // --- Category 1 upgrades (WhatsApp-style) ---
     onForward: (MessageResponse) -> Unit = {},
+    onForwardSelected: (List<MessageResponse>) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onToggleStar: (String) -> Unit = {},
+    // Batch star for the selection toolbar (single state update + single store
+    // write). Defaults to the legacy per-item loop for callers that don't wire it.
+    onSetStars: (List<String>, Boolean) -> Unit = { ids, _ -> ids.forEach { onToggleStar(it) } },
+    onTogglePin: (String) -> Unit = {},
     onToggleSelect: (String) -> Unit = {},
     onClearSelection: () -> Unit = {},
     onVoiceCall: () -> Unit = {},
@@ -130,6 +135,11 @@ fun ChatScreen(
     onOpenDocument: (String, String, String) -> Unit = { _, _, _ -> },
     // ── Fullscreen media viewer (spec 42 route) ──
     onOpenImage: (String) -> Unit = {},
+    // ── In-app video player (videoViewer route; replaces external browser) ──
+    onOpenVideo: (String) -> Unit = {},
+    // ── Call-link join (tap on a call.ollacore.com link opens the in-app
+    //   call screen; never the external browser - the domain has no site) ──
+    onJoinCallLink: (audioOnly: Boolean) -> Unit = {},
     // ── Upload preview / cancel / retry (spec 12) ──
     onCancelUpload: () -> Unit = {},
     onRetryUpload: () -> Unit = {},
@@ -179,6 +189,21 @@ fun ChatScreen(
     var selectedBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     // A new target re-anchors from scratch (never a stale position).
     LaunchedEffect(showActions?.id) { selectedBounds = null }
+    // ── Call-link join chooser (tap on a call.ollacore.com link) ──
+    var showCallLinkChooser by remember { mutableStateOf(false) }
+    if (showCallLinkChooser) {
+        AlertDialog(
+            onDismissRequest = { showCallLinkChooser = false },
+            title = { Text("Join call") },
+            text = { Text("How do you want to join this call?") },
+            confirmButton = {
+                TextButton(onClick = { showCallLinkChooser = false; onJoinCallLink(false) }) { Text("Video") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCallLinkChooser = false; onJoinCallLink(true) }) { Text("Voice") }
+            }
+        )
+    }
     // Delete confirmation targets: 1 from the actions sheet, N from the selection toolbar.
     var deleteQueue by remember { mutableStateOf<List<MessageResponse>>(emptyList()) }
     var showEmojiPicker by remember { mutableStateOf(false) }
@@ -192,6 +217,9 @@ fun ChatScreen(
     var recentMedia by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // Selection-toolbar feedback (Forward / Star): without it a tap that only
+    // flips tiny bubble state reads as "button not working".
+    val snackbar = remember { SnackbarHostState() }
     // Context popup follows WhatsApp: any list scroll dismisses it.
     LaunchedEffect(listState.isScrollInProgress) {
         if (listState.isScrollInProgress) showActions = null
@@ -365,6 +393,7 @@ fun ChatScreen(
         LocalChatTheme provides chatStyle
     ) {
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
@@ -406,9 +435,23 @@ fun ChatScreen(
                     if (uiState.selectionMode) {
                         Text("${uiState.selectedIds.size}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(end = 8.dp))
                         IconButton(onClick = {
-                            // Forward selected - for now forward first selected
-                            uiState.selectedIds.firstOrNull()?.let { id ->
-                                uiState.messages.find { it.id == id }?.let { onForward(it) }
+                            // Forward all selected (multi-message forward into this
+                            // chat). Always clears selection + confirms: previously
+                            // the tap left selection active with no feedback, and
+                            // on a dead socket literally nothing happened on screen.
+                            val msgs = uiState.selectedIds.mapNotNull { id ->
+                                uiState.messages.find { it.id == id }
+                            }
+                            if (msgs.size == 1) onForward(msgs.first())
+                            else if (msgs.isNotEmpty()) onForwardSelected(msgs)
+                            onClearSelection()
+                            if (msgs.isNotEmpty()) {
+                                scope.launch {
+                                    snackbar.showSnackbar(
+                                        if (msgs.size == 1) "Forwarded 1 message"
+                                        else "Forwarded ${msgs.size} messages"
+                                    )
+                                }
                             }
                         }) {
                             Icon(Icons.Default.Forward, contentDescription = "Forward")
@@ -423,10 +466,25 @@ fun ChatScreen(
                         }) {
                             Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
                         }
+                        // Batch-uniform star: star all unless every selected id is
+                        // already starred (then unstar all). Icon mirrors the
+                        // action: filled = tap will unstar, outline = tap will star.
+                        val toolbarIds = uiState.selectedIds.toList()
+                        val toolbarShouldStar = resolveBatchStarAction(toolbarIds, uiState.starredIds)
                         IconButton(onClick = {
-                            uiState.selectedIds.forEach { onToggleStar(it) }
+                            onSetStars(toolbarIds, toolbarShouldStar)
+                            onClearSelection()
+                            scope.launch {
+                                snackbar.showSnackbar(
+                                    if (toolbarShouldStar) "Starred ${toolbarIds.size} message(s)"
+                                    else "Unstarred ${toolbarIds.size} message(s)"
+                                )
+                            }
                         }) {
-                            Icon(Icons.Default.Star, contentDescription = "Star")
+                            Icon(
+                                if (toolbarShouldStar) Icons.Default.StarBorder else Icons.Default.Star,
+                                contentDescription = if (toolbarShouldStar) "Star" else "Unstar"
+                            )
                         }
                         IconButton(onClick = {
                             deleteQueue = uiState.selectedIds.mapNotNull { id ->
@@ -509,6 +567,38 @@ fun ChatScreen(
                             modifier = Modifier.weight(1f)
                         )
                         TextButton(onClick = onClearError) { Text("Dismiss") }
+                    }
+                }
+            }
+            // Pinned messages banner (WhatsApp-style quick reference within the conversation).
+            val pinnedMessages = remember(uiState.messages, uiState.pinnedIds) {
+                uiState.messages.filter { it.id in uiState.pinnedIds }
+            }
+            if (pinnedMessages.isNotEmpty()) {
+                val latest = pinnedMessages.last()
+                val snippet = bodyString(latest.body, "text")?.takeIf { it.isNotBlank() }
+                    ?: quoteSnippet(latest)
+                Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Bookmark, contentDescription = "Pinned", modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                if (pinnedMessages.size == 1) "Pinned message" else "Pinned (${pinnedMessages.size})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                snippet.take(120),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        TextButton(onClick = { onTogglePin(latest.id) }) { Text("Unpin") }
                     }
                 }
             }
@@ -595,6 +685,8 @@ fun ChatScreen(
                         isDeleted = isDeleted,
                         onOpenDocument = onOpenDocument,
                         onOpenImage = onOpenImage,
+                        onOpenVideo = onOpenVideo,
+                        onCallLinkTap = { showCallLinkChooser = true },
                         isStarred = isStarred,
                         isSelected = isSelected,
                         attachmentUrls = attachmentUrls,
@@ -1081,6 +1173,7 @@ fun ChatScreen(
         val isOwnAction = message.senderId == uiState.currentUserId ||
             (uiState.currentUserId.isBlank() && (message.senderId == "self" || message.senderId.isBlank()))
         val starredAction = message.id in uiState.starredIds
+        val pinnedAction = message.id in uiState.pinnedIds
         val statusAction = uiState.messageStatus[message.id]
             ?: message.clientMessageId?.let { uiState.messageStatus[it] }
         val msgText = bodyString(message.body, "text") ?: ""
@@ -1088,6 +1181,7 @@ fun ChatScreen(
             message = message,
             isOwn = isOwnAction,
             isStarred = starredAction,
+            isPinned = pinnedAction,
             status = statusAction,
             hasText = msgText.isNotBlank(),
             isText = message.kind.equals(MessageKinds.TEXT, ignoreCase = true),
@@ -1105,6 +1199,7 @@ fun ChatScreen(
             onDelete = { deleteQueue = listOf(message); showActions = null },
             onReact = { emoji -> onAddReaction(message.id, emoji); showActions = null },
             onStar = { onToggleStar(message.id); showActions = null },
+            onPin = { onTogglePin(message.id); showActions = null },
             onSelect = { onToggleSelect(message.id); showActions = null }
         )
     }
@@ -1200,6 +1295,8 @@ fun MessageBubble(
     showSender: Boolean = false,
     onOpenDocument: (String, String, String) -> Unit = { _, _, _ -> },
     onOpenImage: (String) -> Unit = {},
+    onOpenVideo: (String) -> Unit = {},
+    onCallLinkTap: () -> Unit = {},
     isDeleted: Boolean = false,
     quoted: MessageResponse? = null,
     quotedSender: String? = null,
@@ -1299,7 +1396,7 @@ fun MessageBubble(
                         }
                     }
                     // ── Media rendering (was text-only gap): image / video / doc / audio / location ──
-                    MediaMessageContent(message = message, attachmentUrls = attachmentUrls, onResolveUrl = onResolveUrl, onForceResolveUrl = onForceResolveUrl, isOwn = isOwn, onGradient = isOwn, onOpenDocument = onOpenDocument, onOpenImage = onOpenImage)
+                    MediaMessageContent(message = message, attachmentUrls = attachmentUrls, onResolveUrl = onResolveUrl, onForceResolveUrl = onForceResolveUrl, isOwn = isOwn, onGradient = isOwn, onOpenDocument = onOpenDocument, onOpenImage = onOpenImage, onOpenVideo = onOpenVideo, onCallLinkTap = onCallLinkTap)
                     BubbleFooter(message = message, isStarred = isStarred, isSelected = isSelected, status = status, isOwn = isOwn, onRetry = onRetry, onGradient = isOwn)
                 }
             }
@@ -1561,7 +1658,9 @@ private fun MediaMessageContent(
     isOwn: Boolean,
     onGradient: Boolean = false,
     onOpenDocument: (String, String, String) -> Unit = { _, _, _ -> },
-    onOpenImage: (String) -> Unit = {}
+    onOpenImage: (String) -> Unit = {},
+    onOpenVideo: (String) -> Unit = {},
+    onCallLinkTap: () -> Unit = {}
 ) {
     val body = message.body
     val caption = bodyString(body, "text") ?: ""
@@ -1580,7 +1679,7 @@ private fun MediaMessageContent(
         return
     }
 
-    val isMedia = attachmentId != null || kind in setOf(MessageKinds.IMAGE, MessageKinds.VIDEO, MessageKinds.AUDIO, MessageKinds.FILE)
+    val isMedia = attachmentId != null || kind in setOf(MessageKinds.IMAGE, MessageKinds.VIDEO, MessageKinds.AUDIO, MessageKinds.VOICE_NOTE, MessageKinds.FILE)
     if (!isMedia) {
         // Forwarded messages arrive prefixed "[Forwarded] " (see ChatViewModel
         // forward): render the reference-style Forwarded label and strip the
@@ -1591,16 +1690,18 @@ private fun MediaMessageContent(
             ForwardedLabel(isOwn = isOwn)
         }
         if (displayCaption.isNotEmpty()) {
-            LinkifiedText(displayCaption, modifier = Modifier.padding(4.dp))
+            LinkifiedText(displayCaption, modifier = Modifier.padding(4.dp), onCallLinkClick = onCallLinkTap)
             // Client-side link preview card (no unfurl backend): domain + open.
             com.ollacore.app.data.util.firstUrl(displayCaption)?.let { url ->
-                LinkPreviewCard(url = url)
+                LinkPreviewCard(url = url, onCallLinkClick = onCallLinkTap)
             }
         } else if (kind != MessageKinds.TEXT) {
-            // voice_note / contact / future kinds have no backend yet: honest label, never blank.
+            // contact / future kinds have no backend yet: honest label, never blank.
+            // voice_note with audio content renders as a player below; this branch
+            // only covers voice_note rows without any playable attachment.
             Text(
                 when (kind) {
-                    "voice_note" -> "🎵 Voice message (needs backend voice_note support)"
+                    "voice_note" -> "🎵 Voice message"
                     "video_note" -> "🎥 Video message (needs backend video_note support)"
                     "contact" -> "👤 Shared contact (needs backend support)"
                     "poll" -> "📊 Poll (needs backend support)"
@@ -1620,6 +1721,7 @@ private fun MediaMessageContent(
         MessageKinds.IMAGE -> "image/jpeg"
         MessageKinds.VIDEO -> "video/mp4"
         MessageKinds.AUDIO -> "audio/mpeg"
+        MessageKinds.VOICE_NOTE -> "audio/mp4"
         else -> "application/octet-stream"
     }
     val url = attachmentId?.let { attachmentUrls[it] }
@@ -1637,9 +1739,9 @@ private fun MediaMessageContent(
             )
         }
         kind == MessageKinds.VIDEO || effectiveMime.startsWith("video/") -> {
-            VideoBubbleContent(url = url, caption = caption)
+            VideoBubbleContent(url = url, caption = caption, onOpenVideo = onOpenVideo)
         }
-        kind == MessageKinds.AUDIO || effectiveMime.startsWith("audio/") -> {
+        kind == MessageKinds.AUDIO || kind == MessageKinds.VOICE_NOTE || effectiveMime.startsWith("audio/") -> {
             // duration_ms (ours) or duration seconds (peer clients) - voiceDurationMs handles both.
             val durationMs = com.ollacore.app.data.model.voiceDurationMs(body)
             val wave = body["waveform"]?.jsonArray?.mapNotNull {
@@ -1716,9 +1818,13 @@ private fun ImageBubbleContent(
 }
 
 @Composable
-private fun VideoBubbleContent(url: String?, caption: String) {
-    val context = LocalContext.current
+private fun VideoBubbleContent(
+    url: String?,
+    caption: String,
+    onOpenVideo: (String) -> Unit = {}
+) {
     // Spec 14: thumbnail + duration via framework retriever (no new dep); premium tile.
+    // Tap routes to the in-app VideoViewerScreen (never the external browser).
     var thumb by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
     var durationMs by remember(url) { mutableStateOf<Long?>(null) }
     LaunchedEffect(url) {
@@ -1743,9 +1849,7 @@ private fun VideoBubbleContent(url: String?, caption: String) {
             modifier = Modifier.size(width = 240.dp, height = 150.dp)
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().clickable(enabled = url != null) {
-                if (url != null) {
-                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { }
-                }
+                if (url != null) onOpenVideo(url)
             }) {
                 val bitmap = thumb
                 if (bitmap != null) {
@@ -2217,9 +2321,17 @@ private fun dayLabel(day: java.time.LocalDate): String {
     }
 }
 
+/** call.ollacore.com has no website: its links join the in-app call screen. */
+private fun isCallLink(url: String): Boolean =
+    com.ollacore.app.data.util.linkHost(url).equals("call.ollacore.com", ignoreCase = true)
+
 /** Message text with tappable links (client-side; no unfurl service). */
 @Composable
-private fun LinkifiedText(text: String, modifier: Modifier = Modifier) {
+private fun LinkifiedText(
+    text: String,
+    modifier: Modifier = Modifier,
+    onCallLinkClick: (() -> Unit)? = null
+) {
     val context = LocalContext.current
     // Theme token (not system-based) so forced Light/Dark modes get the right link color.
     val linkColor = MaterialTheme.colorScheme.primary
@@ -2245,17 +2357,25 @@ private fun LinkifiedText(text: String, modifier: Modifier = Modifier) {
         modifier = modifier,
         onClick = { offset ->
             annotated.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { ann ->
-                runCatching {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ann.item)))
+                if (onCallLinkClick != null && isCallLink(ann.item)) {
+                    onCallLinkClick()
+                } else {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ann.item)))
+                    }
                 }
             }
         }
     )
 }
 
-/** Compact link preview: globe + host + URL line; tap opens the browser. */
+/** Compact link preview: globe + host + URL line; tap opens the browser
+ * (call links join the in-app call screen instead - no website exists). */
 @Composable
-private fun LinkPreviewCard(url: String) {
+private fun LinkPreviewCard(
+    url: String,
+    onCallLinkClick: (() -> Unit)? = null
+) {
     val context = LocalContext.current
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -2264,8 +2384,12 @@ private fun LinkPreviewCard(url: String) {
             .padding(top = 6.dp)
             .widthIn(max = 260.dp)
             .clickable {
-                runCatching {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                if (onCallLinkClick != null && isCallLink(url)) {
+                    onCallLinkClick()
+                } else {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    }
                 }
             }
     ) {

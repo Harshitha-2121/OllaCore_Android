@@ -203,6 +203,62 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Favourites + custom chat lists (CLIENT-ONLY ChatPrefsStore sets) ──
+
+    /** Toggle one room's favourite state. */
+    fun toggleFavourite(roomId: String) {
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.toggleFavourite(roomId) }
+        }
+    }
+
+    /** Favourite when any selected room is unfavourited, else unfavourite all. */
+    fun toggleFavouriteSelected() {
+        val ids = _selectedIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val fav = runCatching {
+                container.chatPrefsStore.favouriteRooms.first()
+            }.getOrElse { emptySet() }
+            val make = ids.any { it !in fav }
+            ids.forEach { id ->
+                val cur = runCatching {
+                    container.chatPrefsStore.favouriteRooms.first()
+                }.getOrElse { emptySet() }
+                if ((id in cur) != make) {
+                    runCatching { container.chatPrefsStore.toggleFavourite(id) }
+                }
+            }
+        }
+    }
+
+    /**
+     * Create a custom chat list and add [roomIds] as members.
+     * Name is trimmed (store caps at 40 chars); duplicate names rejected.
+     * Result delivered via [done] for inline UI error display.
+     */
+    fun createChatListWithMembers(
+        name: String,
+        roomIds: Collection<String>,
+        done: (Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            val clean = name.trim().take(40)
+            val ok = if (clean.isEmpty()) {
+                false
+            } else {
+                runCatching { container.chatPrefsStore.createChatList(clean) }
+                    .getOrElse { false }
+            }
+            if (ok) {
+                roomIds.forEach { id ->
+                    runCatching { container.chatPrefsStore.setRoomInList(clean, id, true) }
+                }
+            }
+            done(ok)
+        }
+    }
+
     /** Single-room archive (swipe gesture, Archived screen button). */
     fun archiveChat(roomId: String) {
         viewModelScope.launch {

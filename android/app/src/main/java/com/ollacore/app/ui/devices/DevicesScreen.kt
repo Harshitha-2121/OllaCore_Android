@@ -103,10 +103,12 @@ fun DevicesScreen(
                 } else {
                     ListItem(
                         headlineContent = { Text("This phone is not registered for push") },
-                        supportingContent = { Text("Register to receive calls and messages in background") },
+                        supportingContent = {
+                            Text(uiState.pushIssue ?: "Register to receive calls and messages in background")
+                        },
                         trailingContent = {
                             FilledTonalButton(onClick = onRegisterThis, enabled = !uiState.isWorking) {
-                                Text("Link this device")
+                                Text(if (uiState.thisPushToken == null && uiState.pushIssue != null) "Retry" else "Link this device")
                             }
                         }
                     )

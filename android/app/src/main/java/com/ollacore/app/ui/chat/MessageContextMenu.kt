@@ -22,6 +22,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
@@ -50,7 +52,7 @@ private val PopupSubtle = Color.White.copy(alpha = 0.12f)
 private val PopupDanger = Color(0xFFF15C6D)
 
 /** Top-level menu entries in reference order. */
-enum class MenuActionId { REPLY, FORWARD, COPY, INFO, STAR, DELETE, MORE }
+enum class MenuActionId { REPLY, FORWARD, COPY, INFO, STAR, PIN, DELETE, MORE }
 
 /** Overflow entries behind "More...". */
 enum class MoreActionId { SELECT, EDIT }
@@ -71,6 +73,7 @@ fun menuActionsFor(isOwn: Boolean, hasText: Boolean, isDeleted: Boolean): List<M
         if (hasText) add(MenuActionId.COPY)
         add(MenuActionId.INFO)
         add(MenuActionId.STAR)
+        add(MenuActionId.PIN)
         if (isOwn) add(MenuActionId.DELETE)
         add(MenuActionId.MORE)
     }
@@ -95,6 +98,7 @@ fun MessageContextMenu(
     message: MessageResponse,
     isOwn: Boolean,
     isStarred: Boolean,
+    isPinned: Boolean = false,
     status: MessageStatus?,
     hasText: Boolean,
     isText: Boolean,
@@ -108,6 +112,7 @@ fun MessageContextMenu(
     onDelete: () -> Unit,
     onReact: (String) -> Unit,
     onStar: () -> Unit,
+    onPin: () -> Unit = {},
     onSelect: () -> Unit
 ) {
     var showInfo by remember(message.id) { mutableStateOf(false) }
@@ -189,6 +194,7 @@ fun MessageContextMenu(
                     message = message,
                     isOwn = isOwn,
                     isStarred = isStarred,
+                    isPinned = isPinned,
                     hasText = hasText,
                     isText = isText,
                     isDeleted = isDeleted,
@@ -197,6 +203,7 @@ fun MessageContextMenu(
                     onCopy = { onCopy(); close() },
                     onInfo = { showInfo = true },
                     onStar = { onStar(); close() },
+                    onPin = { onPin(); close() },
                     onDelete = onDelete,
                     onMore = { showMore = true },
                     onSelect = { onSelect(); close() },
@@ -282,6 +289,7 @@ private fun MenuCard(
     message: MessageResponse,
     isOwn: Boolean,
     isStarred: Boolean,
+    isPinned: Boolean = false,
     hasText: Boolean,
     isText: Boolean,
     isDeleted: Boolean,
@@ -290,6 +298,7 @@ private fun MenuCard(
     onCopy: () -> Unit,
     onInfo: () -> Unit,
     onStar: () -> Unit,
+    onPin: () -> Unit = {},
     onDelete: () -> Unit,
     onMore: () -> Unit,
     onSelect: () -> Unit,
@@ -321,6 +330,11 @@ private fun MenuCard(
                         if (isStarred) Icons.Default.Star else Icons.Default.StarBorder,
                         if (isStarred) "Unstar" else "Star",
                         onStar
+                    )
+                    MenuActionId.PIN -> MenuRow(
+                        if (isPinned) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                        if (isPinned) "Unpin" else "Pin",
+                        onPin
                     )
                     MenuActionId.DELETE -> MenuRow(
                         Icons.Default.DeleteOutline, "Delete", onDelete, danger = true

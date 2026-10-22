@@ -14,6 +14,7 @@ class MessageContextMenuTest {
                 MenuActionId.COPY,
                 MenuActionId.INFO,
                 MenuActionId.STAR,
+                MenuActionId.PIN,
                 MenuActionId.DELETE,
                 MenuActionId.MORE
             ),
@@ -29,6 +30,7 @@ class MessageContextMenuTest {
                 MenuActionId.FORWARD,
                 MenuActionId.INFO,
                 MenuActionId.STAR,
+                MenuActionId.PIN,
                 MenuActionId.MORE
             ),
             menuActionsFor(isOwn = false, hasText = false, isDeleted = false)

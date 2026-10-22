@@ -50,6 +50,7 @@ fun ContactInfoScreen(
     onBackToChat: () -> Unit,
     onOpenImage: (String) -> Unit,
     onOpenDocument: (String, String, String) -> Unit,
+    onOpenVideo: (String) -> Unit = {},
     // ── New: options / groups / management wiring ──
     onOpenMediaBrowser: () -> Unit = {},
     onOpenStarred: () -> Unit = {},
@@ -190,11 +191,7 @@ fun ContactInfoScreen(
                             thumb = thumb,
                             onOpenImage = onOpenImage,
                             onOpenDocument = onOpenDocument,
-                            onOpenVideo = { url ->
-                                runCatching {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                                }
-                            }
+                            onOpenVideo = onOpenVideo,
                         )
                     }
                 }

@@ -70,7 +70,9 @@ sealed class SignalingFrame {
         val callerName: String,
         val roomId: String,
         val media: String
-    ) : SignalingFrame()
+    ) : SignalingFrame() {
+        val audioOnly: Boolean get() = media != "video"
+    }
     data class Ringing(val callId: String) : SignalingFrame()
     data class Accepted(val callId: String) : SignalingFrame()
     data class Rejected(val callId: String, val reason: String) : SignalingFrame()

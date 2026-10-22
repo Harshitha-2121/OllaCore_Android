@@ -46,15 +46,15 @@ sealed interface OpenChatResult {
 
 /**
  * Contacts = inbox peers (server, in-memory) MERGED with user-saved local
- * contacts (DataStore, persistent). Local CRUD updates the list reactively via
- * [LocalContactsStore.contacts]; there is no Ollacore contact-CRUD endpoint,
+ * contacts (Room, persistent). Local CRUD updates the list reactively via
+ * [ContactRepository.contacts]; there is no Ollacore contact-CRUD endpoint,
  * so add/edit/delete are client-local by design (never faked as server ops).
  */
 class ContactsViewModel(application: Application) : AndroidViewModel(application) {
     private val container = (application as OllacoreApp).container
     private val directoryRepo = container.directoryRepository
     private val sessionStore = container.sessionStore
-    private val localStore = container.localContactsStore
+    private val localStore = container.contactRepository
 
     private val inboxPeers = MutableStateFlow<List<ContactUser>>(emptyList())
     private val loading = MutableStateFlow(false)
@@ -71,6 +71,7 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ContactsUiState())
 
     init {
+        viewModelScope.launch { runCatching { localStore.migrateLegacyIfNeeded() } }
         refresh()
     }
 

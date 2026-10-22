@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,6 +32,8 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.*
@@ -51,6 +54,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ollacore.app.data.local.CallLogEntry
 import com.ollacore.app.data.model.InboxItem
+import com.ollacore.app.ui.contact.ChatListBuilderSheet
+import com.ollacore.app.ui.contact.NewListIntroContent
 import com.ollacore.app.ui.calls.CallHistoryContent
 import com.ollacore.app.ui.settings.SettingsContent
 import com.ollacore.app.ui.theme.BrandAvatar
@@ -77,7 +82,7 @@ internal val WaGreen: Color @Composable get() = MaterialTheme.colorScheme.primar
 internal val WaPill: Color @Composable get() = MaterialTheme.colorScheme.primaryContainer
 internal val WaDivider: Color @Composable get() = MaterialTheme.colorScheme.outline
 
-private enum class ChatFilter { ALL, UNREAD, GROUPS, CHANNELS }
+/** Replaced by [HomeFilter] (adds Favorites + custom lists); kept out to avoid dead code. */
 
 /**
  * Phase 1 / spec-9 Home dashboard: logo title, search + menu actions,
@@ -138,7 +143,12 @@ fun HomeScreen(
     // Reference "Archived" screen entry + swipe gestures.
     onArchived: () -> Unit = {},
     onArchiveChat: (String) -> Unit = {},
-    onUnarchiveChat: (String) -> Unit = {}
+    onUnarchiveChat: (String) -> Unit = {},
+    // Favourites + custom chat lists (CLIENT-ONLY ChatPrefsStore sets).
+    favouriteRooms: Set<String> = emptySet(),
+    chatLists: Map<String, List<String>> = emptyMap(),
+    onToggleFavourite: () -> Unit = {},
+    onCreateChatList: (String, List<String>, (Boolean) -> Unit) -> Unit = { _, _, done -> done(false) }
 ) {
     // Enums are not SaveableStateRegistry-compatible: persist the name, derive the tab.
     var tabName by rememberSaveable { mutableStateOf(HomeTab.CHATS.name) }
@@ -158,6 +168,7 @@ fun HomeScreen(
     val allPinned = selecting && selectedIds.all { it in pinnedRooms }
     val allMuted = selecting && selectedIds.all { it in mutedRooms }
     val allArchived = selecting && selectedIds.all { it in archivedRooms }
+    val allFavourited = selecting && selectedIds.all { it in favouriteRooms }
 
     Scaffold(
         containerColor = WaBg,
@@ -187,6 +198,12 @@ fun HomeScreen(
                             Icon(
                                 Icons.Default.PushPin,
                                 contentDescription = if (allPinned) "Unpin" else "Pin"
+                            )
+                        }
+                        IconButton(onClick = onToggleFavourite) {
+                            Icon(
+                                if (allFavourited) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = if (allFavourited) "Remove from favorites" else "Add to favorites"
                             )
                         }
                         IconButton(onClick = { showDeleteChats = true }) {
@@ -522,10 +539,13 @@ fun HomeScreen(
                     archivedRooms = archivedRooms,
                     selectedIds = selectedIds,
                     pinnedRooms = pinnedRooms,
+                    favouriteRooms = favouriteRooms,
+                    chatLists = chatLists,
                     onToggleSelect = onToggleSelect,
                     onArchived = onArchived,
                     onArchiveChat = onArchiveChat,
                     onUnarchiveChat = onUnarchiveChat,
+                    onCreateChatList = onCreateChatList,
                     modifier = Modifier.fillMaxSize()
                 )
                 HomeTab.UPDATES -> com.ollacore.app.ui.updates.UpdatesContent(
@@ -552,6 +572,52 @@ fun HomeScreen(
     }
 }
 
+/**
+ * Chats filter model. Built-ins map to stable keys; custom lists carry the
+ * user list name (store is name-keyed; duplicates rejected case-insensitively
+ * at creation, so the name is effectively stable).
+ */
+private sealed interface HomeFilter {
+    data object All : HomeFilter
+    data object Unread : HomeFilter
+    data object Favorites : HomeFilter
+    data object Groups : HomeFilter
+    data object Channels : HomeFilter
+    data class Custom(val name: String) : HomeFilter
+
+    fun key(): String = when (this) {
+        All -> "ALL"
+        Unread -> "UNREAD"
+        Favorites -> "FAVORITES"
+        Groups -> "GROUPS"
+        Channels -> "CHANNELS"
+        is Custom -> "LIST:$name"
+    }
+
+    companion object {
+        fun fromKey(key: String): HomeFilter = when {
+            key == "UNREAD" -> Unread
+            key == "FAVORITES" -> Favorites
+            key == "GROUPS" -> Groups
+            key == "CHANNELS" -> Channels
+            key.startsWith("LIST:") -> Custom(key.removePrefix("LIST:"))
+            else -> All
+        }
+    }
+}
+
+/** Single-line chip label: never wraps, truncates with ellipsis instead. */
+@Composable
+private fun FilterLabel(text: String) {
+    Text(
+        text,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatsContent(
     uiState: HomeUiState,
@@ -561,15 +627,28 @@ private fun ChatsContent(
     archivedRooms: Set<String> = emptySet(),
     selectedIds: Set<String> = emptySet(),
     pinnedRooms: Set<String> = emptySet(),
+    favouriteRooms: Set<String> = emptySet(),
+    chatLists: Map<String, List<String>> = emptyMap(),
     onToggleSelect: (String) -> Unit = {},
     onArchived: () -> Unit = {},
     onArchiveChat: (String) -> Unit = {},
     onUnarchiveChat: (String) -> Unit = {},
+    onCreateChatList: (String, List<String>, (Boolean) -> Unit) -> Unit = { _, _, done -> done(false) },
     modifier: Modifier = Modifier
 ) {
-    // Same SaveableStateRegistry rule as tabs: persist the enum name, not the enum.
-    var filterName by rememberSaveable { mutableStateOf(ChatFilter.ALL.name) }
-    val filter = runCatching { ChatFilter.valueOf(filterName) }.getOrElse { ChatFilter.ALL }
+    // Persist the stable filter key (SaveableStateRegistry-safe String).
+    var filterKey by rememberSaveable { mutableStateOf(HomeFilter.All.key()) }
+    // A custom filter whose list vanished falls back to All (never stranded).
+    val filter = remember(filterKey, chatLists) {
+        val parsed = HomeFilter.fromKey(filterKey)
+        if (parsed is HomeFilter.Custom && parsed.name !in chatLists) HomeFilter.All else parsed
+    }
+    // New-list flow sheets.
+    var showListIntro by rememberSaveable { mutableStateOf(false) }
+    var showListBuilder by rememberSaveable { mutableStateOf(false) }
+    var savingList by remember { mutableStateOf(false) }
+    var listSaveError by remember { mutableStateOf<String?>(null) }
+    val customNames = remember(chatLists) { chatLists.keys.sorted() }
     val haptics = LocalHapticFeedback.current
     // Tap toggles while selecting, opens otherwise; long-press always selects.
     fun onTap(roomId: String) {
@@ -589,15 +668,27 @@ private fun ChatsContent(
     val archivedItems = remember(uiState.inbox, archivedRooms) {
         uiState.inbox.filter { it.roomId in archivedRooms }
     }
-    val visible = remember(unarchived, filter, pinnedRooms) {
+    // Filtering only selects the displayed collection; inbox data is untouched.
+    val visible = remember(unarchived, filter, pinnedRooms, favouriteRooms, chatLists) {
         val base = when (filter) {
-            ChatFilter.ALL -> unarchived
-            ChatFilter.UNREAD -> unarchived.filter { it.unreadCount > 0 }
-            ChatFilter.GROUPS -> unarchived.filter { it.kind.equals("group", ignoreCase = true) }
-            ChatFilter.CHANNELS -> emptyList()
+            HomeFilter.All -> unarchived
+            HomeFilter.Unread -> unarchived.filter { it.unreadCount > 0 }
+            HomeFilter.Favorites -> unarchived.filter { it.roomId in favouriteRooms }
+            HomeFilter.Groups -> unarchived.filter { it.kind.equals("group", ignoreCase = true) }
+            HomeFilter.Channels -> emptyList()
+            is HomeFilter.Custom -> {
+                val members = chatLists[filter.name] ?: emptyList()
+                unarchived.filter { it.roomId in members }
+            }
         }
         // Pinned chats float to the top (stable otherwise).
         base.sortedWith(compareBy({ it.roomId !in pinnedRooms }))
+    }
+    // Titles for member picking (roomId -> display title).
+    val chatTitles = remember(unarchived) {
+        unarchived.map { item ->
+            item.roomId to (item.name ?: item.peer?.displayName ?: item.peer?.phone ?: item.roomId)
+        }
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -632,27 +723,110 @@ private fun ChatsContent(
             }
         }
 
-        // Filter chips.
-        Row(
+        // Filter chips: single scrollable row, labels never wrap.
+        // Order: All, Unread, Favorites, Groups, Channels, custom lists, +.
+        LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = Modifier.padding(vertical = 4.dp)
         ) {
-            ChatFilter.entries.forEach { option ->
+            item(key = "filter-all") {
                 FilterChip(
-                    selected = filter == option,
-                    onClick = { filterName = option.name },
+                    selected = filter == HomeFilter.All,
+                    onClick = { filterKey = HomeFilter.All.key() },
+                    label = { FilterLabel("All") }
+                )
+            }
+            item(key = "filter-unread") {
+                FilterChip(
+                    selected = filter == HomeFilter.Unread,
+                    onClick = { filterKey = HomeFilter.Unread.key() },
+                    label = { FilterLabel("Unread") }
+                )
+            }
+            item(key = "filter-favorites") {
+                FilterChip(
+                    selected = filter == HomeFilter.Favorites,
+                    onClick = { filterKey = HomeFilter.Favorites.key() },
+                    label = { FilterLabel("Favorites") }
+                )
+            }
+            item(key = "filter-groups") {
+                FilterChip(
+                    selected = filter == HomeFilter.Groups,
+                    onClick = { filterKey = HomeFilter.Groups.key() },
+                    label = { FilterLabel("Groups") }
+                )
+            }
+            item(key = "filter-channels") {
+                FilterChip(
+                    selected = filter == HomeFilter.Channels,
+                    onClick = { filterKey = HomeFilter.Channels.key() },
+                    label = { FilterLabel("Channels") }
+                )
+            }
+            items(customNames, key = { "filter-list-$it" }) { name ->
+                FilterChip(
+                    selected = filter == HomeFilter.Custom(name),
+                    onClick = { filterKey = HomeFilter.Custom(name).key() },
                     label = {
                         Text(
-                            when (option) {
-                                ChatFilter.ALL -> "All"
-                                ChatFilter.UNREAD -> "Unread"
-                                ChatFilter.GROUPS -> "Groups"
-                                ChatFilter.CHANNELS -> "Channels"
-                            }
+                            name,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 160.dp)
                         )
                     }
                 )
             }
+            item(key = "filter-add") {
+                FilterChip(
+                    selected = false,
+                    onClick = { showListIntro = true },
+                    label = {
+                        Text(
+                            "+",
+                            maxLines = 1,
+                            softWrap = false,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                )
+            }
+        }
+        // New-list intro + builder sheets (creation flow, not decoration).
+        if (showListIntro) {
+            ModalBottomSheet(onDismissRequest = { showListIntro = false }) {
+                NewListIntroContent(
+                    onClose = { showListIntro = false },
+                    onContinue = { showListIntro = false; showListBuilder = true }
+                )
+            }
+        }
+        if (showListBuilder) {
+            ChatListBuilderSheet(
+                chats = chatTitles,
+                existingNames = chatLists.keys,
+                saving = savingList,
+                saveError = listSaveError,
+                onSave = { name, memberIds ->
+                    savingList = true
+                    listSaveError = null
+                    onCreateChatList(name, memberIds) { ok ->
+                        savingList = false
+                        if (ok) {
+                            showListBuilder = false
+                            // Jump straight to the new filter (immediate feedback).
+                            filterKey = HomeFilter.Custom(name.trim().take(40)).key()
+                        } else {
+                            listSaveError = "Could not create this list. Try another name."
+                        }
+                    }
+                },
+                onDismiss = { showListBuilder = false; listSaveError = null }
+            )
         }
 
         // Spec 33/34: skeletons while loading, friendly error with retry.
@@ -663,7 +837,7 @@ private fun ChatsContent(
             )
         } else if (uiState.isLoading && uiState.inbox.isEmpty()) {
             com.ollacore.app.ui.common.SkeletonList(rows = 7)
-        } else if (filter == ChatFilter.CHANNELS) {
+        } else if (filter == HomeFilter.Channels) {
             // Honest empty state: channels need the backend service.
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(
@@ -693,14 +867,20 @@ private fun ChatsContent(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         when (filter) {
-                            ChatFilter.UNREAD -> "No unread chats"
-                            ChatFilter.GROUPS -> "No groups yet"
+                            HomeFilter.Unread -> "No unread chats"
+                            HomeFilter.Favorites -> "No favorites yet"
+                            HomeFilter.Groups -> "No groups yet"
+                            is HomeFilter.Custom -> "No chats in this list"
                             else -> "No chats yet"
                         },
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        "Your conversations will appear here.",
+                        when (filter) {
+                            HomeFilter.Favorites -> "Long-press chats and tap ★ to add favorites."
+                            is HomeFilter.Custom -> "This list is empty."
+                            else -> "Your conversations will appear here."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -720,6 +900,7 @@ private fun ChatsContent(
                             myUserId = uiState.myUserId,
                             isSelected = item.roomId in selectedIds,
                             isPinned = item.roomId in pinnedRooms,
+                            isFavorite = item.roomId in favouriteRooms,
                             onClick = { onTap(item.roomId) },
                             onLongClick = { onLongPress(item.roomId) }
                         )
@@ -770,6 +951,7 @@ fun InboxItemRow(
     myUserId: String? = null,
     isSelected: Boolean = false,
     isPinned: Boolean = false,
+    isFavorite: Boolean = false,
     onLongClick: (() -> Unit)? = null
 ) {
     val title = item.name ?: item.peer?.displayName ?: item.peer?.phone ?: "Unknown"
@@ -872,6 +1054,15 @@ fun InboxItemRow(
                             contentDescription = "Pinned",
                             modifier = Modifier.size(14.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (isFavorite) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Icon(
+                            Icons.Default.Star,
+                            contentDescription = "Favorite",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }

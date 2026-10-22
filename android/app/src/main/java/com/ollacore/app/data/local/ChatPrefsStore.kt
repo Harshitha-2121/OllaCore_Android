@@ -30,6 +30,7 @@ class ChatPrefsStore(private val context: Context) {
         private val KEY_APP_LOCK = stringPreferencesKey("app_lock")
         private val KEY_ALIASES = stringPreferencesKey("contact_aliases_json")
         private val KEY_STARRED = stringPreferencesKey("starred_json")
+        private val KEY_PINNED_MSGS = stringPreferencesKey("pinned_messages_json")
         private val KEY_HIDDEN = stringPreferencesKey("hidden_messages_json")
         private val KEY_DELETED_EVERYONE = stringPreferencesKey("deleted_everyone_json")
         private val KEY_FAVOURITES = stringPreferencesKey("favourites_json")
@@ -244,6 +245,42 @@ class ChatPrefsStore(private val context: Context) {
             it[KEY_STARRED] = json.encodeToString(mapSer, all)
         }
         return nowStarred
+    }
+
+    /**
+     * Batch star/unstar in a SINGLE read-modify-write. The selection toolbar
+     * used to fire one toggleStar per selected id; those concurrent edits
+     * raced (last writer wins) and could silently drop stars.
+     */
+    suspend fun setStarred(roomId: String, messageIds: Collection<String>, starred: Boolean) {
+        if (messageIds.isEmpty()) return
+        val all = readStarred()
+        val list = all.getOrPut(roomId) { mutableListOf() }
+        if (starred) messageIds.forEach { id -> if (!list.contains(id)) list.add(id) }
+        else list.removeAll(messageIds.toSet())
+        context.prefsStore.edit {
+            it[KEY_STARRED] = json.encodeToString(mapSer, all)
+        }
+    }
+
+    // ── Pinned message ids, per room (CLIENT-ONLY; bodies stay server-side) ──
+
+    suspend fun getPinnedIds(roomId: String): Set<String> =
+        readMsgMap(KEY_PINNED_MSGS)[roomId]?.toSet() ?: emptySet()
+
+    /** Toggles and returns the new pinned state. */
+    suspend fun togglePinnedMessage(roomId: String, messageId: String): Boolean {
+        val all = readMsgMap(KEY_PINNED_MSGS)
+        val list = all.getOrPut(roomId) { mutableListOf() }
+        val nowPinned = if (list.contains(messageId)) {
+            list.remove(messageId); false
+        } else {
+            list.add(messageId); true
+        }
+        context.prefsStore.edit {
+            it[KEY_PINNED_MSGS] = json.encodeToString(mapSer, all)
+        }
+        return nowPinned
     }
 
     // ── Message deletions, per room ──

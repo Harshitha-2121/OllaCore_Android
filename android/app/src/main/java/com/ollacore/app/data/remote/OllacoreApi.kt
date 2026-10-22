@@ -12,6 +12,7 @@ class OllacoreApi(
     private val apiBase: String = "https://api.ollacore.com/v1",
     private val appId: String = "da_3a0a2cfaabd34b7dbfb4ecd5033b0c5f"
 ) {
+    val baseUrl: String = apiBase
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val mediaType = "application/json; charset=utf-8".toMediaType()
 

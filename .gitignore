@@ -1,0 +1,17 @@
+# Local-only work reports & progress logs (kept on disk, removed from GitHub)
+PROGRESS*
+*REPORT*
+*report*
+*_report_*
+*_REPORT_*
+
+# Local build logs
+*.log
+build-*.log
+
+# Local QA artifacts (adb screenshots, uiautomator dumps, machine-specific helper scripts)
+qa/
+
+# OS
+.DS_Store
+Thumbs.db
