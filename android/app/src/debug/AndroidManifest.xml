@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: cleartext WebSocket (ws://) is allowed to loopback and
+     private LAN ranges so the local signaling server (android/signaling) can
+     be reached from the emulator (10.0.2.2) and dev devices (adb reverse /
+     LAN IP). Referenced by app/src/debug/AndroidManifest.xml; release builds
+     never merge this overlay and stay HTTPS/WSS-only. User-added CAs are also
+     trusted in debug so QA can proxy traffic. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:networkSecurityConfig="@xml/network_security_config_debug"
+        tools:replace="android:networkSecurityConfig" />
+</manifest>

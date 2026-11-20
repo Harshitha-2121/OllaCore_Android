@@ -6,6 +6,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 
+/**
+ * Thin wrappers over the backend's key-management endpoints
+ * (`/rooms/{id}/keys/...`). HONEST SCOPE: this class contains NO cryptography
+ * and no MLS implementation. The app does not provide end-to-end encryption;
+ * messages are protected in transit by TLS/WSS. These wrappers exist so a real
+ * MLS engine could be added later without changing the API surface, and the
+ * UI must never claim E2EE while this remains true.
+ */
 class E2eeManager(private val api: OllacoreApi) {
 
     suspend fun uploadDeviceKeys(

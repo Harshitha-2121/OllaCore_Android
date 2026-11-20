@@ -19,7 +19,7 @@ data class PrivacySecurityUiState(
 )
 
 /**
- * Spec 25: E2EE info (real, local), app lock (real device-credential gate),
+ * Spec 25: transport-protection info (the app has no E2EE), app lock (real device-credential gate),
  * security notifications (stored toggle). Last seen / photo / about /
  * receipts / blocks / disappearing need the backend privacy store, so those
  * rows are honestly marked instead of faked.

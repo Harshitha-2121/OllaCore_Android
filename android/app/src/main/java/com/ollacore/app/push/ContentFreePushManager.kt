@@ -25,7 +25,8 @@ class ContentFreePushManager(private val context: Context) {
     // Track E2EE room states (roomId -> isEncrypted)
     private val encryptedRooms = mutableSetOf<String>()
 
-    // Notification channels
+    // Effects/channels keep the internal id (renaming ids recreates channels on
+    // devices); visible names no longer claim encryption that does not exist.
     companion object {
         const val CHANNEL_MESSAGES = "message_channel"
         const val CHANNEL_MESSAGES_E2EE = "message_channel_e2ee"
@@ -47,13 +48,13 @@ class ContentFreePushManager(private val context: Context) {
             description = "Regular chat messages"
         }
 
-        // E2EE message channel (no preview)
+        // No-preview message channel (used for rooms flagged content-free)
         val e2eeMessageChannel = NotificationChannel(
             CHANNEL_MESSAGES_E2EE,
-            "Encrypted Messages",
+            "Messages - no preview",
             NotificationManager.IMPORTANCE_DEFAULT
         ).apply {
-            description = "Encrypted messages - content hidden"
+            description = "Message notifications without content preview"
             setShowBadge(true)
         }
 
@@ -66,13 +67,13 @@ class ContentFreePushManager(private val context: Context) {
             description = "Incoming calls"
         }
 
-        // E2EE call channel
+        // No-preview call channel
         val e2eeCallChannel = NotificationChannel(
             CHANNEL_CALLS_E2EE,
-            "Encrypted Calls",
+            "Calls - no preview",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Incoming encrypted calls"
+            description = "Incoming call notifications without content preview"
         }
 
         notificationManager.createNotificationChannels(listOf(
@@ -130,10 +131,10 @@ class ContentFreePushManager(private val context: Context) {
 
         // For content-free mode: strip all sensitive content
         val (title, body) = if (isEncrypted) {
-            // Never expose content for E2EE rooms
+            // Never expose content for content-free rooms
             Pair(
                 "New message",
-                "You have a new encrypted message"
+                "You have a new message (preview hidden)"
             )
         } else {
             // Regular rooms can show preview
@@ -172,7 +173,7 @@ class ContentFreePushManager(private val context: Context) {
         val effectiveCallId = callId ?: roomId
 
         val (title, body) = if (isEncrypted) {
-            Pair("Incoming call", "You have an incoming encrypted call")
+            Pair("Incoming call", "You have an incoming call")
         } else {
             Pair("Incoming call", "$initiatorName is calling")
         }

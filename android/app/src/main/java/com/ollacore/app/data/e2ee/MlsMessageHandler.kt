@@ -8,6 +8,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.*
 
+/**
+ * Parses `mls.*` message envelopes and tracks group/epoch counters.
+ *
+ * HONEST SCOPE: no MLS cryptography is implemented. `ciphertext`/`group_info`
+ * fields are read, not produced or decrypted, so the app does NOT provide
+ * end-to-end encryption (messages are TLS/WSS-protected in transit only).
+ * Kept as integration plumbing for a future real MLS engine.
+ */
 class MlsMessageHandler {
 
     private val _state = MutableStateFlow(MlsState())

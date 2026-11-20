@@ -257,6 +257,7 @@ object MessageKinds {
     const val IMAGE = "image"
     const val VIDEO = "video"
     const val AUDIO = "audio"
+    const val VOICE_NOTE = "voice_note"
     const val FILE = "file"
     const val LOCATION = "location" // backend/API check required - client sends, server may reject unknown kind
 }

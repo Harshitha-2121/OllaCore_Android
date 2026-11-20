@@ -3,6 +3,8 @@ package com.ollacore.app.ui.devices
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.google.firebase.messaging.FirebaseMessaging
 import com.ollacore.app.OllacoreApp
 import com.ollacore.app.data.model.DeviceResponse
@@ -17,6 +19,8 @@ data class DevicesUiState(
     val devices: List<DeviceResponse> = emptyList(),
     /** Best-effort FCM token of this handset (null when Play services unavailable). */
     val thisPushToken: String? = null,
+    /** Precise reason the token is missing; null while loading or when ready. */
+    val pushIssue: String? = null,
     val isLoading: Boolean = false,
     val isWorking: Boolean = false,
     val error: String? = null,
@@ -39,11 +43,44 @@ class DevicesViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         refresh()
-        // Best-effort: resolve this handset's FCM token without adding new deps.
-        runCatching {
-            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    _uiState.update { it.copy(thisPushToken = task.result) }
+        resolvePushToken()
+    }
+
+    /**
+     * Best-effort FCM token with a precise, user-facing failure reason.
+     * Failure used to be silent (null token forever); each cause below
+     * maps to a different fix, so it is surfaced instead of swallowed.
+     */
+    fun resolvePushToken() {
+        val app = getApplication<Application>()
+        val playStatus = runCatching {
+            GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(app)
+        }.getOrElse { ConnectionResult.SERVICE_MISSING }
+        if (playStatus != ConnectionResult.SUCCESS) {
+            val name = runCatching {
+                GoogleApiAvailability.getInstance().getErrorString(playStatus)
+            }.getOrElse { "unavailable" }
+            _uiState.update {
+                it.copy(pushIssue = "Google Play services $name - push needs Play services on this device.")
+            }
+            return
+        }
+        // No google-services.json in the build = FirebaseApp never
+        // initialises; getInstance() throws and must not be silent.
+        val messaging = runCatching { FirebaseMessaging.getInstance() }.getOrElse { null }
+        if (messaging == null) {
+            _uiState.update {
+                it.copy(pushIssue = "Push is not configured in this build (Firebase missing). Add google-services.json and reinstall.")
+            }
+            return
+        }
+        _uiState.update { it.copy(pushIssue = null) }
+        messaging.token.addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                _uiState.update { it.copy(thisPushToken = task.result, pushIssue = null) }
+            } else {
+                _uiState.update {
+                    it.copy(pushIssue = "Could not get a push token (${task.exception?.message ?: "unknown error"}). Check network and retry.")
                 }
             }
         }
@@ -67,7 +104,12 @@ class DevicesViewModel(application: Application) : AndroidViewModel(application)
     fun registerThisDevice() {
         val pushToken = _uiState.value.thisPushToken
         if (pushToken.isNullOrBlank()) {
-            _uiState.update { it.copy(error = "Push token unavailable (Google Play services required)") }
+            // Retry the token first: the tap becomes a retry, not a dead end.
+            // Registration itself proceeds on the next tap once a token exists.
+            resolvePushToken()
+            _uiState.update {
+                it.copy(error = it.pushIssue ?: "Getting a push token... tap again in a moment.")
+            }
             return
         }
         viewModelScope.launch {

@@ -36,8 +36,8 @@ function loadConfig(env = process.env) {
   loadDotEnv(path.join(__dirname, '..', '.env'));
 
   const authMode = (env.AUTH_MODE || 'backend').toLowerCase();
-  if (authMode !== 'backend' && authMode !== 'dev') {
-    throw new Error(`Invalid AUTH_MODE "${authMode}" (expected "backend" or "dev")`);
+  if (authMode !== 'backend' && authMode !== 'dev' && authMode !== 'dual') {
+    throw new Error(`Invalid AUTH_MODE "${authMode}" (expected "backend", "dev" or "dual")`);
   }
 
   const tlsKey = env.TLS_KEY || '';

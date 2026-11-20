@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -55,6 +56,7 @@ import com.ollacore.app.ui.contacts.NewContactScreen
 import com.ollacore.app.ui.devices.DevicesScreen
 import com.ollacore.app.ui.docs.DocumentViewerScreen
 import com.ollacore.app.ui.media.ImageViewerScreen
+import com.ollacore.app.ui.media.VideoViewerScreen
 import com.ollacore.app.ui.devices.DevicesViewModel
 import com.ollacore.app.ui.globalsearch.GlobalSearchScreen
 import com.ollacore.app.ui.globalsearch.GlobalSearchViewModel
@@ -89,6 +91,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // BUG-11: refresh this handset's push registration for an existing
+        // session. Safe no-op when google-services.json is not in the build
+        // (the Linked Devices screen explains that state honestly).
+        lifecycleScope.launch {
+            runCatching {
+                (application as OllacoreApp).container.pushRegistrationManager.registerIfNeeded()
+            }
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -318,6 +328,12 @@ fun OllacoreNavHost() {
             val mutedRooms by remember(homeContext) {
                 com.ollacore.app.data.local.ChatPrefsStore(homeContext.applicationContext).mutedRooms
             }.collectAsState(initial = emptySet())
+            val favouriteRooms by remember(homeContext) {
+                com.ollacore.app.data.local.ChatPrefsStore(homeContext.applicationContext).favouriteRooms
+            }.collectAsState(initial = emptySet())
+            val chatLists by remember(homeContext) {
+                com.ollacore.app.data.local.ChatPrefsStore(homeContext.applicationContext).chatLists
+            }.collectAsState(initial = emptyMap())
             val selectedChatIds by homeViewModel.selectedIds.collectAsState()
             val readAllState by homeViewModel.readAllState.collectAsState()
 
@@ -352,11 +368,17 @@ fun OllacoreNavHost() {
                     // service lands: intro explains, then real group flow.
                     navController.navigate("communityIntro")
                 },
-                onSettings = { navController.navigate("settings") },
+                onSettings = { navController.navigate("settings") { launchSingleTop = true } },
                 archivedRooms = archivedRooms,
                 selectedIds = selectedChatIds,
                 pinnedRooms = pinnedRooms,
                 mutedRooms = mutedRooms,
+                favouriteRooms = favouriteRooms,
+                chatLists = chatLists,
+                onToggleFavourite = { homeViewModel.toggleFavouriteSelected() },
+                onCreateChatList = { name, ids, done ->
+                    homeViewModel.createChatListWithMembers(name, ids, done)
+                },
                 onToggleSelect = { homeViewModel.toggleChatSelect(it) },
                 onClearSelection = { homeViewModel.clearChatSelection() },
                 onSelectAll = {
@@ -381,12 +403,21 @@ fun OllacoreNavHost() {
         }
 
         composable("settings") {
+            val app = LocalContext.current.applicationContext as OllacoreApp
+            val session = app.container.sessionStore
+            val profileName by session.displayName.collectAsState(initial = authState.displayName)
+            val profileAbout by session.about.collectAsState(initial = authState.about)
+            val profileAvatar by session.avatarUrl.collectAsState(initial = authState.avatarUrl)
             com.ollacore.app.ui.settings.SettingsRoot(
-                onProfile = { navController.navigate("profile") },
-                onDevices = { navController.navigate("devices") },
-                onPrivacy = { navController.navigate("privacy") },
-                onNotifications = { navController.navigate("notifSettings") },
-                onBack = { navController.popBackStack() }
+                onProfile = { navController.navigate("profile") { launchSingleTop = true } },
+                onDevices = { navController.navigate("devices") { launchSingleTop = true } },
+                onPrivacy = { navController.navigate("privacy") { launchSingleTop = true } },
+                onNotifications = { navController.navigate("notifSettings") { launchSingleTop = true } },
+                onBack = { navController.popBackStack() },
+                displayName = profileName,
+                about = profileAbout,
+                avatarUrl = profileAvatar,
+                profileLoading = authState.isLoading
             )
         }
 
@@ -469,8 +500,11 @@ fun OllacoreNavHost() {
                     navController.navigate("search/$roomId/$roomToken")
                 },
                 onForward = { msg -> chatViewModel.forwardMessage(msg) },
+                onForwardSelected = { msgs -> chatViewModel.forwardMessages(msgs) },
                 onCopy = { _ -> },
                 onToggleStar = { id -> chatViewModel.toggleStar(id) },
+                onSetStars = { ids, starred -> chatViewModel.setStars(ids, starred) },
+                onTogglePin = { id -> chatViewModel.togglePin(id) },
                 onToggleSelect = { id -> chatViewModel.toggleSelect(id) },
                 onClearSelection = { chatViewModel.clearSelection() },
                 onVoiceCall = {
@@ -522,6 +556,13 @@ fun OllacoreNavHost() {
                 },
                 onOpenImage = { url ->
                     navController.navigate("imageViewer?url=${Uri.encode(url)}")
+                },
+                onOpenVideo = { url ->
+                    navController.navigate("videoViewer?url=${Uri.encode(url)}")
+                },
+                onJoinCallLink = { audioOnly ->
+                    val peer = Uri.encode(chatState.peerName ?: "Call")
+                    navController.navigate("call/$roomId?audioOnly=$audioOnly&peerName=$peer&peerId=${chatState.peerUserId ?: ""}")
                 },
                 onStartRecord = { chatViewModel.startRecording() },
                 onCancelRecord = { chatViewModel.cancelRecording() },
@@ -616,6 +657,7 @@ fun OllacoreNavHost() {
                 onBack = { navController.popBackStack() },
                 onUpdateName = { name -> authViewModel.updateProfile(name, authState.about) },
                 onUpdateProfile = { name, about -> authViewModel.updateProfile(name, about) },
+                onUpdateAvatar = { avatarUrl -> authViewModel.updateProfile(authState.displayName, authState.about, avatarUrl) },
                 onLinkedDevices = { navController.navigate("devices") },
                 onPrivacy = { navController.navigate("privacy") },
                 onNotifications = { navController.navigate("notifSettings") },
@@ -867,6 +909,18 @@ fun OllacoreNavHost() {
         }
 
         composable(
+            "videoViewer?url={url}",
+            arguments = listOf(
+                navArgument("url") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { backStackEntry ->
+            VideoViewerScreen(
+                videoUrl = backStackEntry.arguments?.getString("url") ?: "",
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
             "contactInfo/{roomId}?peerName={peerName}&peerPhone={peerPhone}",
             arguments = listOf(
                 navArgument("roomId") { type = NavType.StringType },
@@ -911,6 +965,9 @@ fun OllacoreNavHost() {
                 onBackToChat = { navController.popBackStack() },
                 onOpenImage = { url ->
                     navController.navigate("imageViewer?url=${Uri.encode(url)}")
+                },
+                onOpenVideo = { url ->
+                    navController.navigate("videoViewer?url=${Uri.encode(url)}")
                 },
                 onOpenDocument = { url, name, mime ->
                     navController.navigate(
@@ -1050,6 +1107,9 @@ fun OllacoreNavHost() {
                 onOpenImage = { url ->
                     navController.navigate("imageViewer?url=${Uri.encode(url)}")
                 },
+                onOpenVideo = { url ->
+                    navController.navigate("videoViewer?url=${Uri.encode(url)}")
+                },
                 onOpenDocument = { url, name, mime ->
                     navController.navigate(
                         "doc?url=${Uri.encode(url)}&name=${Uri.encode(name)}&mime=${Uri.encode(mime)}"
@@ -1101,6 +1161,8 @@ fun OllacoreNavHost() {
                 onOpenMedia = { url, mime, name ->
                     if (mime.startsWith("image/")) {
                         navController.navigate("imageViewer?url=${Uri.encode(url)}")
+                    } else if (mime.startsWith("video/")) {
+                        navController.navigate("videoViewer?url=${Uri.encode(url)}")
                     } else {
                         navController.navigate(
                             "doc?url=${Uri.encode(url)}&name=${Uri.encode(name)}&mime=${Uri.encode(mime)}"

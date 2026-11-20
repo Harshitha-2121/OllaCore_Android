@@ -103,7 +103,7 @@ fun SplashScreen(onTimeout: () -> Unit) {
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                "End-to-end encrypted",
+                "Transport protected",
                 style = MaterialTheme.typography.labelMedium,
                 color = Color.White.copy(alpha = 0.7f)
             )

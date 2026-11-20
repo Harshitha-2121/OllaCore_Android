@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ollacore.app.OllacoreApp
+import com.ollacore.app.data.util.friendlyError
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -94,7 +95,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 .onFailure { e ->
-                    _uiState.update { it.copy(isLoading = false, error = e.message ?: "Unable to send OTP") }
+                    // BUG-07: technical detail stays out of user-facing copy.
+                    _uiState.update { it.copy(isLoading = false, error = friendlyError(e.message ?: "Unable to send OTP")) }
                 }
         }
     }
@@ -116,6 +118,11 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         displayName = response.displayName
                     )
                     _sessionToken.value = response.sessionToken
+                    // BUG-11: register this handset's push token now that a
+                    // session exists (safe no-op until Firebase config ships).
+                    viewModelScope.launch {
+                        runCatching { container.pushRegistrationManager.registerIfNeeded() }
+                    }
                     _uiState.update {
                         it.copy(
                             step = AuthStep.AUTHENTICATED,
@@ -145,7 +152,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         }
                 }
                 .onFailure { e ->
-                    _uiState.update { it.copy(isLoading = false, error = e.message ?: "OTP verification failed") }
+                    // BUG-07: raw API/exception text never reaches the OTP UI.
+                    _uiState.update { it.copy(isLoading = false, error = friendlyError(e.message ?: "OTP verification failed")) }
                 }
         }
     }
@@ -177,7 +185,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { e ->
                     // fallback: save locally even if API ignores extra fields (profile photo/about may be client-only until backend extends UpdateProfileRequest)
                     sessionStore.updateProfile(displayName, about, avatarUrl)
-                    _uiState.update { it.copy(displayName = displayName, about = about, avatarUrl = avatarUrl, isLoading = false, error = e.message) }
+                    _uiState.update { it.copy(displayName = displayName, about = about, avatarUrl = avatarUrl, isLoading = false, error = friendlyError(e.message)) }
                 }
         }
     }
@@ -190,6 +198,10 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         val token = _sessionToken.value
         viewModelScope.launch {
             if (!token.isNullOrBlank()) {
+                // BUG-11: drop this handset's push registration before the
+                // session is cleared, so a signed-out account stops receiving
+                // notifications (best-effort: never blocks logout).
+                runCatching { container.pushRegistrationManager.unregister() }
                 runCatching { container.api.logout(token) }
             }
             sessionStore.clear()

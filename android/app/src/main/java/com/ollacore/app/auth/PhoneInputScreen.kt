@@ -188,7 +188,7 @@ fun PhoneInputScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    "Protected with end-to-end encryption",
+                    "Transport protected (TLS/WSS)",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

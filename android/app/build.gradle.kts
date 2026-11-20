@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
 }
 
 // Optional WebSocket signaling server for 1-to-1 WebRTC calls (android/signaling).
@@ -91,7 +92,12 @@ dependencies {
 
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
     implementation(libs.espresso.core)
+
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
@@ -100,6 +106,7 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.firebase.messaging)
+    implementation(libs.play.services.base)
     implementation(libs.webrtc)
 
     testImplementation(libs.junit)

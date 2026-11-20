@@ -9,6 +9,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +23,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
@@ -32,6 +35,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,10 +55,35 @@ private val PopupSubtle = Color.White.copy(alpha = 0.12f)
 private val PopupDanger = Color(0xFFF15C6D)
 
 /** Top-level menu entries in reference order. */
-enum class MenuActionId { REPLY, FORWARD, COPY, INFO, STAR, DELETE, MORE }
+enum class MenuActionId { REPLY, FORWARD, COPY, INFO, STAR, PIN, DELETE, MORE }
 
 /** Overflow entries behind "More...". */
 enum class MoreActionId { SELECT, EDIT }
+
+/**
+ * Pure dismissal policy for the popup surface (unit-tested): every selection
+ * path dismisses the popup, and so do scrim taps and Back. Expanding the
+ * extra-reaction row keeps it open; tapping the toggle while the row is
+ * expanded collapses-and-dismisses. Opening Info keeps the popup.
+ */
+enum class MenuSurfaceEvent {
+    ACTION_PICKED,
+    REACTION_EXPANDED,
+    REACTION_COLLAPSED,
+    INFO_OPENED,
+    SCRIM_TAPPED,
+    BACK_PRESSED
+}
+
+fun dismissMenuOn(event: MenuSurfaceEvent): Boolean = when (event) {
+    MenuSurfaceEvent.ACTION_PICKED,
+    MenuSurfaceEvent.REACTION_COLLAPSED,
+    MenuSurfaceEvent.SCRIM_TAPPED,
+    MenuSurfaceEvent.BACK_PRESSED -> true
+
+    MenuSurfaceEvent.REACTION_EXPANDED,
+    MenuSurfaceEvent.INFO_OPENED -> false
+}
 
 /** Reference reaction set + expandable extras for the "+" flow. */
 val CONTEXT_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏", "🥹")
@@ -71,6 +101,7 @@ fun menuActionsFor(isOwn: Boolean, hasText: Boolean, isDeleted: Boolean): List<M
         if (hasText) add(MenuActionId.COPY)
         add(MenuActionId.INFO)
         add(MenuActionId.STAR)
+        add(MenuActionId.PIN)
         if (isOwn) add(MenuActionId.DELETE)
         add(MenuActionId.MORE)
     }
@@ -95,6 +126,7 @@ fun MessageContextMenu(
     message: MessageResponse,
     isOwn: Boolean,
     isStarred: Boolean,
+    isPinned: Boolean = false,
     status: MessageStatus?,
     hasText: Boolean,
     isText: Boolean,
@@ -108,6 +140,7 @@ fun MessageContextMenu(
     onDelete: () -> Unit,
     onReact: (String) -> Unit,
     onStar: () -> Unit,
+    onPin: () -> Unit = {},
     onSelect: () -> Unit
 ) {
     var showInfo by remember(message.id) { mutableStateOf(false) }
@@ -163,25 +196,49 @@ fun MessageContextMenu(
     }
 
     Popup(
-        offset = offset,
         onDismissRequest = { close() },
         properties = PopupProperties(focusable = true)
     ) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(tween(180)) + scaleIn(tween(200), initialScale = 0.92f) +
-                slideInVertically(tween(200)) { it / 12 },
-            exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.95f)
+        // Full-screen scrim inside the popup window: taps outside the menu
+        // dismiss it, Back dismisses via focusable Popup + onDismissRequest,
+        // and the scrim never leaks taps to the composer underneath. The menu
+        // column is positioned with the same offset math that used to place
+        // the popup itself, so anchoring behavior is unchanged.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { if (dismissMenuOn(MenuSurfaceEvent.SCRIM_TAPPED)) close() }
+                )
+                .semantics { contentDescription = "Close message menu" }
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.width(260.dp)
+                modifier = Modifier
+                    .offset { offset }
+                    .width(260.dp)
             ) {
                 if (!isDeleted) {
                     ReactionBar(
-                        onReact = { emoji -> onReact(emoji); close() },
+                        onReact = { emoji ->
+                            // Attach the reaction to the selected message, then
+                            // close the popup. Never routes into the composer.
+                            onReact(emoji)
+                            close()
+                        },
                         showExtra = showExtraEmoji,
-                        onToggleExtra = { showExtraEmoji = !showExtraEmoji }
+                        onToggleExtra = {
+                            if (showExtraEmoji) {
+                                // Toggle dismiss: tapping the "more" button while
+                                // the extra row is open closes the overlay.
+                                showExtraEmoji = false
+                                close()
+                            } else {
+                                showExtraEmoji = true
+                            }
+                        }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -189,6 +246,7 @@ fun MessageContextMenu(
                     message = message,
                     isOwn = isOwn,
                     isStarred = isStarred,
+                    isPinned = isPinned,
                     hasText = hasText,
                     isText = isText,
                     isDeleted = isDeleted,
@@ -197,6 +255,7 @@ fun MessageContextMenu(
                     onCopy = { onCopy(); close() },
                     onInfo = { showInfo = true },
                     onStar = { onStar(); close() },
+                    onPin = { onPin(); close() },
                     onDelete = onDelete,
                     onMore = { showMore = true },
                     onSelect = { onSelect(); close() },
@@ -234,8 +293,14 @@ private fun ReactionBar(
                         emoji,
                         fontSize = 26.sp,
                         modifier = Modifier
-                            .clickable(onClick = { onReact(emoji) })
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { onReact(emoji) }
+                            )
+                            .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
                             .padding(horizontal = 4.dp)
+                            .semantics { contentDescription = "React with $emoji" }
                     )
                 }
                 Box(
@@ -267,8 +332,14 @@ private fun ReactionBar(
                             emoji,
                             fontSize = 24.sp,
                             modifier = Modifier
-                                .clickable(onClick = { onReact(emoji) })
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = { onReact(emoji) }
+                                )
+                                .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
                                 .padding(horizontal = 4.dp)
+                                .semantics { contentDescription = "React with $emoji" }
                         )
                     }
                 }
@@ -282,6 +353,7 @@ private fun MenuCard(
     message: MessageResponse,
     isOwn: Boolean,
     isStarred: Boolean,
+    isPinned: Boolean = false,
     hasText: Boolean,
     isText: Boolean,
     isDeleted: Boolean,
@@ -290,6 +362,7 @@ private fun MenuCard(
     onCopy: () -> Unit,
     onInfo: () -> Unit,
     onStar: () -> Unit,
+    onPin: () -> Unit = {},
     onDelete: () -> Unit,
     onMore: () -> Unit,
     onSelect: () -> Unit,
@@ -321,6 +394,11 @@ private fun MenuCard(
                         if (isStarred) Icons.Default.Star else Icons.Default.StarBorder,
                         if (isStarred) "Unstar" else "Star",
                         onStar
+                    )
+                    MenuActionId.PIN -> MenuRow(
+                        if (isPinned) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                        if (isPinned) "Unpin" else "Pin",
+                        onPin
                     )
                     MenuActionId.DELETE -> MenuRow(
                         Icons.Default.DeleteOutline, "Delete", onDelete, danger = true

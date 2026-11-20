@@ -100,7 +100,11 @@ fun NewGroupScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (uiState.error != null) {
                 Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.errorContainer) {
-                    Text(uiState.error, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        com.ollacore.app.ui.common.friendlyError(uiState.error),
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
 

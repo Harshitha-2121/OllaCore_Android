@@ -2,6 +2,7 @@ package com.ollacore.app.data.di
 
 import android.content.Context
 import com.ollacore.app.BuildConfig
+import com.ollacore.app.data.db.OllacoreDatabase
 import com.ollacore.app.data.e2ee.E2eeManager
 import com.ollacore.app.data.e2ee.ForwardSecrecyManager
 import com.ollacore.app.data.local.BroadcastStore
@@ -12,10 +13,12 @@ import com.ollacore.app.data.local.GroupEventStore
 import com.ollacore.app.data.local.LocalContactsStore
 import com.ollacore.app.data.local.MessageStatusStore
 import com.ollacore.app.data.local.SessionStore
+import com.ollacore.app.data.media.MediaFileManager
 import com.ollacore.app.data.push.PushConfigManager
 import com.ollacore.app.data.remote.CallSignalingClient
 import com.ollacore.app.data.remote.OllacoreApi
 import com.ollacore.app.data.repository.ChatRepository
+import com.ollacore.app.data.repository.ContactRepository
 import com.ollacore.app.data.repository.DirectoryRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,12 +42,26 @@ class AppContainer(private val context: Context) {
         appId = "da_3a0a2cfaabd34b7dbfb4ecd5033b0c5f"
     )
 
+    // Room (SQLite) — source of truth for messages/conversations/contacts/
+    // status/pending + media metadata. Files stay in app-specific storage.
+    // DataStore keeps only session/prefs/theme.
+    val db = OllacoreDatabase.get(context)
+    val mediaFiles = MediaFileManager(context)
+
     val directoryRepository = DirectoryRepository(api)
-    val chatRepository = ChatRepository(api)
+    val chatRepository = ChatRepository(api, db)
+    // Room-backed contacts (authoritative); localContactsStore kept as the
+    // one-time migration source for pre-Room installs.
+    val contactRepository = ContactRepository(db, localContactsStore)
 
     val e2eeManager = E2eeManager(api)
     val forwardSecrecyManager = ForwardSecrecyManager()
     val pushConfigManager = PushConfigManager()
+    // BUG-11: FCM token -> backend device registration. Degrades to a no-op
+    // until google-services.json is added (see PushRegistrationManager KDoc).
+    val pushRegistrationManager = com.ollacore.app.push.PushRegistrationManager(
+        context, directoryRepository, sessionStore
+    )
 
     // App-scoped WebSocket signaling for 1-to-1 WebRTC calls (server lives in
     // android/signaling). Disabled (empty URL) until signalingUrl is configured;

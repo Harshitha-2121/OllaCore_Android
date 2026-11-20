@@ -348,7 +348,11 @@ private fun GroupInfoContent(
                 uiState.error?.let { err ->
                     Surface(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.errorContainer) {
                         Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(err, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                com.ollacore.app.ui.common.friendlyError(err),
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall
+                            )
                             TextButton(onClick = onClearTransient) { Text("Dismiss") }
                         }
                     }
@@ -443,11 +447,11 @@ private fun GroupInfoContent(
             item {
                 SectionRow(
                     icon = Icons.Default.Lock,
-                    title = "Encryption",
+                    title = "Message protection",
                     subtitle = if (uiState.isEncrypted) {
-                        "Messages are end-to-end encrypted. Tap to learn more."
+                        "Transport-protected (TLS/WSS). End-to-end encryption not enabled."
                     } else {
-                        "Standard transport protection. Tap to learn more."
+                        "Transport protection (TLS/WSS). End-to-end encryption not enabled."
                     },
                     onClick = onShowEncryption
                 )
@@ -540,6 +544,7 @@ private fun GroupInfoContent(
                     member = member,
                     selfId = uiState.selfId,
                     isAdminViewer = uiState.isAdmin,
+                    contactNames = uiState.contactNames,
                     onClick = { if (uiState.isAdmin) onMemberMenu(member) }
                 )
             }
@@ -700,21 +705,22 @@ private fun MemberRow(
     member: Participant,
     selfId: String?,
     isAdminViewer: Boolean,
+    contactNames: Map<String, String>,
     onClick: () -> Unit
 ) {
     val you = selfId != null && member.principalId == selfId
     ListItem(
         headlineContent = {
             Text(
-                memberDisplayName(member),
+                memberDisplayName(member, contactNames),
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         },
-        supportingContent = { Text(memberSubtitle(member, selfId)) },
+        supportingContent = { Text(memberSubtitle(member, selfId, contactNames)) },
         leadingContent = {
-            com.ollacore.app.ui.theme.BrandAvatar(name = memberDisplayName(member), size = 40.dp)
+            com.ollacore.app.ui.theme.BrandAvatar(name = memberDisplayName(member, contactNames), size = 40.dp)
         },
         trailingContent = {
             if (isGroupAdmin(member)) {
@@ -889,10 +895,10 @@ private fun GroupInfoDialogs(
         val isAdmin = member.role.equals("admin", ignoreCase = true)
         AlertDialog(
             onDismissRequest = { onMemberMenu(null) },
-            title = { Text(memberDisplayName(member)) },
+            title = { Text(memberDisplayName(member, uiState.contactNames)) },
             text = {
                 Column {
-                    Text(memberSubtitle(member, uiState.selfId), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(memberSubtitle(member, uiState.selfId, uiState.contactNames), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(modifier = Modifier.height(8.dp))
                     ListItem(headlineContent = { Text(if (isAdmin) "Dismiss as admin" else "Make group admin") }, leadingContent = { Icon(Icons.Default.AdminPanelSettings, null) },
                         modifier = Modifier.clickable { onSetAdmin(member.principalId, !isAdmin); onMemberMenu(null) })
@@ -1012,13 +1018,13 @@ private fun GroupInfoDialogs(
     if (showEncryption) {
         AlertDialog(
             onDismissRequest = onShowEncryption,
-            title = { Text("Encryption") },
+            title = { Text("Message protection") },
             text = {
                 Text(
                     if (uiState.isEncrypted) {
-                        "Messages in this group are end-to-end encrypted. Only members hold the keys; each session rotation mints fresh epoch keys. Verify safety details with members out-of-band."
+                        "Messages are protected in transit over TLS/WSS. This app does not currently provide end-to-end encryption or forward secrecy guarantees."
                     } else {
-                        "This group does not advertise end-to-end encryption for this session. Messages still travel over TLS to Ollacore servers."
+                        "Messages are protected in transit over TLS/WSS. This app does not currently provide end-to-end encryption or forward secrecy guarantees."
                     }
                 )
             },

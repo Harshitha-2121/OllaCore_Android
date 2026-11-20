@@ -5,6 +5,8 @@
 //   AUTH_MODE=backend : GET {API_BASE}/directory/me with the app's Bearer token
 //                       (same endpoint/profile the app already uses for "my profile").
 //   AUTH_MODE=dev     : token "dev:<userId>" - local testing only.
+//   AUTH_MODE=dual    : backend verification with a "dev:<userId>" fallback so a
+//                       scripted test peer can join a real-app call (testing only).
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_MAX = 1000;
@@ -16,14 +18,19 @@ class TokenVerifier {
     this.cache = new Map(); // token -> { userId, expiresAt } (in-memory only)
   }
 
+  get devFallback() {
+    return this.cfg.authMode === 'dev' || this.cfg.authMode === 'dual';
+  }
+
   async verify(token) {
     if (typeof token !== 'string' || token.length === 0 || token.length > 4096) return null;
 
-    if (this.cfg.authMode === 'dev') {
-      if (!token.startsWith('dev:')) return null;
+    if (token.startsWith('dev:')) {
+      if (!this.devFallback) return null;
       const userId = token.slice(4).trim();
       return /^[A-Za-z0-9_.@:\-]{1,128}$/.test(userId) ? userId : null;
     }
+    if (this.cfg.authMode === 'dev') return null;
 
     const cached = this.cache.get(token);
     const now = Date.now();

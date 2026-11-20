@@ -49,7 +49,7 @@ fun PrivacySecurityScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
-            // E2EE information (real, local).
+            // Transport-protection information (the app does not implement E2EE).
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -66,9 +66,9 @@ fun PrivacySecurityScreen(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
-                        Text("End-to-end encrypted", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Text("Transport protection", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Messages use MLS encryption with forward secrecy - removed members lose future access.",
+                            "Messages are protected in transit over TLS/WSS. This app does not currently provide end-to-end encryption.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

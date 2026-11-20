@@ -169,7 +169,7 @@ class GlobalSearchViewModel(application: Application) : AndroidViewModel(applica
                 SearchTab.MEDIA -> isImage(message, kind, mime) || isVideo(message, kind, mime)
                 SearchTab.IMAGES -> isImage(message, kind, mime)
                 SearchTab.VIDEOS -> isVideo(message, kind, mime)
-                SearchTab.AUDIO -> kind == "audio" || mime.startsWith("audio/")
+                SearchTab.AUDIO -> kind == "audio" || kind == "voice_note" || mime.startsWith("audio/")
                 SearchTab.DOCUMENTS -> kind == "file" || kind == "document" ||
                     mime.startsWith("application/") || mime.startsWith("text/")
                 SearchTab.LINKS -> hasLink(message)
@@ -184,6 +184,7 @@ class GlobalSearchViewModel(application: Application) : AndroidViewModel(applica
                 "image" -> "📷 Photo"
                 "video" -> "🎥 Video"
                 "audio" -> "🎵 Audio"
+                "voice_note" -> "🎵 Voice message"
                 "file", "document" -> "📄 Document"
                 "location" -> "📍 Location"
                 else -> "Message"

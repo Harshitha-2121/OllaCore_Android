@@ -17,6 +17,8 @@ import com.ollacore.app.data.remote.ChatWebSocket
 import com.ollacore.app.data.remote.WebSocketEvent
 import com.ollacore.app.data.remote.WsMessage
 import com.ollacore.app.ui.call.CallRinger
+import com.ollacore.app.ui.groups.contactNameFrom
+import com.ollacore.app.ui.groups.resolveMemberName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -70,6 +72,7 @@ data class ChatUiState(
     val deletedIds: Set<String> = emptySet(),
     // WhatsApp-style chat upgrade (Category 1 - API YES except star/select are client-only)
     val starredIds: Set<String> = emptySet(),
+    val pinnedIds: Set<String> = emptySet(),
     val selectedIds: Set<String> = emptySet(),
     val selectionMode: Boolean = false,
     val peerName: String? = null,
@@ -139,7 +142,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val pendingPayloads = mutableMapOf<String, PendingSend>()
 
     init {
-        // Restore tick states known before a restart; live receipts upgrade
+        // Legacy tick restore (pre-Room installs): Room ranks merge per-room
+        // in loadMessages and are authoritative; live receipts upgrade
         // from here, so reopened chats never flash back to single-tick.
         viewModelScope.launch {
             val stored = runCatching { statusStore.snapshot() }.getOrElse { emptyMap() }
@@ -226,10 +230,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             if (isGroup) loadParticipants(response.accessToken)
                         }
                     }
-                    // Restore persisted stars for this room (bodies stay server-side).
+                    // Restore persisted stars + pins for this room (bodies stay server-side).
                     _uiState.update {
                         it.copy(
                             starredIds = runCatching { container.chatPrefsStore.getStarredIds(roomId) }
+                                .getOrElse { emptySet() },
+                            pinnedIds = runCatching { container.chatPrefsStore.getPinnedIds(roomId) }
                                 .getOrElse { emptySet() }
                         )
                     }
@@ -316,8 +322,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     setStatus(msg.id, MessageStatus.SENT)
                     pendingPayloads.remove(msg.clientMessageId)
                 }
-                _uiState.update {
-                    it.copy(messages = it.messages + response)
+                // Duplicate suppression (BUG-02): a repeated/late message.created
+                // frame replaces the row in place instead of appending a twin.
+                _uiState.update { state ->
+                    state.copy(messages = mergeIncomingMessage(state.messages, response))
                 }
                 // Prefetch download URLs for new media messages (Ollacore API: GET /rooms/{id}/attachments/{aid}/download)
                 attachmentRefIds(response).forEach { aid -> resolveAttachmentUrl(aid, auto = true) }
@@ -484,8 +492,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             chatRepo.getParticipants(roomToken, roomId)
                 .onSuccess { resp ->
+                    // BUG-09: rosters often carry bare principal ids. Fill in the
+                    // real name from the local contacts table (same identity key),
+                    // then fall back to a neutral label — never a truncated id.
+                    val directory = runCatching {
+                        val dao = container.db.contactDao()
+                        resp.participants.mapNotNull { p ->
+                            dao.get(p.principalId)?.let { c ->
+                                contactNameFrom(
+                                    c.displayName, c.firstName, c.lastName,
+                                    c.phone, c.normalizedPhone, c.username
+                                )?.let { name -> p.principalId to name }
+                            }
+                        }.toMap()
+                    }.getOrElse { emptyMap() }
                     val names = resp.participants.associate { p ->
-                        p.principalId to (p.displayName ?: p.phone ?: p.principalId.take(8))
+                        p.principalId to resolveMemberName(p.principalId, p.displayName, p.phone, directory)
                     }
                     val phones = resp.participants.associate { p ->
                         p.principalId to (p.phone ?: "")
@@ -499,6 +521,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun loadMessages(roomToken: String) {
         _uiState.update { it.copy(isLoading = true) }
+        // Offline-first: paint the Room cache instantly (one scoped snapshot,
+        // not a live collector - socket appends own the live list until the
+        // server sync below lands and write-through caches). Then sync.
+        val cached = runCatching { chatRepo.cachedMessages(roomId, limit = 50) }.getOrElse { emptyList() }
+        if (cached.isNotEmpty()) {
+            val ranks = runCatching { chatRepo.cachedStatuses(roomId) }.getOrElse { emptyMap() }
+            _uiState.update { state ->
+                val seeded = state.messageStatus.toMutableMap()
+                ranks.forEach { (id, rank) ->
+                    val status = MessageStatus.entries.find { it.rank == rank } ?: return@forEach
+                    val cur = seeded[id]
+                    if (cur == null || status.rank > cur.rank) seeded[id] = status
+                }
+                cached.forEach { m ->
+                    if (m.senderId == currentUserId && currentUserId.isNotBlank() && !seeded.containsKey(m.id)) {
+                        seeded[m.id] = MessageStatus.SENT
+                    }
+                }
+                state.copy(
+                    messages = applyLocalViewFilter(cached.sortedBy { m -> m.eventSeq }),
+                    isLoading = false,
+                    error = null,
+                    messageStatus = seeded
+                )
+            }
+        }
         // Server pages oldest-first: a bare limit=50 returns the FIRST page, so rooms
         // with 50+ messages opened on ancient history and latest (often own) messages
         // never appeared. Anchor with a huge before_seq to land on the LATEST page.
@@ -514,7 +562,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     val liveIds = response.messages.map { it.id }.toSet()
                     it.copy(
-                        messages = applyLocalViewFilter(response.messages.sortedBy { m -> m.eventSeq }),
+                        // Server history is authoritative for a full reload, but
+                        // normalize duplicates (defensive: an overlapping
+                        // page/sync must never render the same row twice).
+                        messages = applyLocalViewFilter(
+                            dedupeById(response.messages.sortedBy { m -> m.eventSeq })
+                        ),
                         isLoading = false,
                         error = null,
                         messageStatus = seeded,
@@ -624,29 +677,64 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(editingMessage = message) }
     }
 
-    // ── WhatsApp-style: Forward / Copy / Select / Star (Category 1) ──
-    // Forward reuses existing sendMessage API (POST /v1/rooms/{id}/messages / WS message.send) - no new Ollacore endpoint
+    // ── WhatsApp-style: Forward / Copy / Select / Star / Pin (Category 1) ──
+    // Forward reuses existing sendMessage path (WS message.send) - no new Ollacore endpoint.
+    // Text AND media forward: kind + attachment_ids + media metadata travel with the copy.
     fun forwardMessage(message: MessageResponse, targetRoomId: String? = null) {
-        val text = message.body["text"]?.let { try { it.jsonPrimitive.content } catch (_: Exception) { "" } } ?: ""
-        val forwardBody = if (text.isNotBlank()) "[Forwarded] $text" else text
+        forwardMessages(listOf(message), targetRoomId)
+    }
+
+    /** Forwards one or more messages (multi-select) preserving text/media. */
+    fun forwardMessages(messages: List<MessageResponse>, targetRoomId: String? = null) {
+        if (messages.isEmpty()) return
         val dest = targetRoomId ?: roomId
-        // If forwarding within same chat, just send as new message; cross-chat forward is handled by caller picking target room
-        if (dest == roomId) {
-            sendMessage(forwardBody)
-        } else {
-            val fwdId = "fwd-${UUID.randomUUID()}"
-            val body = buildJsonObject { put("text", JsonPrimitive(forwardBody)) }
-            setStatus(fwdId, MessageStatus.SENDING)
-            pendingPayloads[fwdId] =
-                PendingSend(kind = com.ollacore.app.data.model.MessageKinds.TEXT, body = body, attachmentIds = emptyList(), replyTo = null)
-            viewModelScope.launch {
-                // For cross-room forward, caller should navigate to target and send there; we also support direct WS if same socket
-                val requestId = chatWebSocket?.sendMessage(dest, fwdId, body)
-                if (requestId != null) requestToClient[requestId] = fwdId
-                else setStatus(fwdId, MessageStatus.FAILED)
+        messages.forEach { message ->
+            val rawText = message.body["text"]?.let { try { it.jsonPrimitive.content } catch (_: Exception) { "" } } ?: ""
+            val forwardBody = buildForwardBody(rawText, message.kind, copyStringField(message, "filename"))
+            val kind = message.kind.ifBlank { com.ollacore.app.data.model.MessageKinds.TEXT }
+            val aids = attachmentRefIds(message)
+            val body = buildJsonObject {
+                put("text", JsonPrimitive(forwardBody))
+                copyStringField(message, "mime")?.let { put("mime", JsonPrimitive(it)) }
+                copyStringField(message, "filename")?.let { put("filename", JsonPrimitive(it)) }
+                copyLongField(message, "byte_size")?.let { put("byte_size", JsonPrimitive(it)) }
+                copyLongField(message, "duration_ms")?.let { put("duration_ms", JsonPrimitive(it)) }
+                copyLongField(message, "duration")?.let { put("duration", JsonPrimitive(it)) }
+                message.body["waveform"]?.let { put("waveform", it) }
+                copyDoubleField(message, "lat")?.let { put("lat", JsonPrimitive(it)) }
+                copyDoubleField(message, "lng")?.let { put("lng", JsonPrimitive(it)) }
+            }
+            if (dest == roomId) {
+                val clientMessageId = "fwd-${UUID.randomUUID()}"
+                trackSend(clientMessageId, kind, body, aids, replyTo = null)
+            } else {
+                val fwdId = "fwd-${UUID.randomUUID()}"
+                setStatus(fwdId, MessageStatus.SENDING)
+                pendingPayloads[fwdId] =
+                    PendingSend(kind = kind, body = body, attachmentIds = aids, replyTo = null)
+                viewModelScope.launch {
+                    // Cross-room forward via the same socket frame with the destination room id.
+                    val requestId = chatWebSocket?.sendMessage(dest, fwdId, body, kind = kind, attachmentIds = aids)
+                    if (requestId != null) requestToClient[requestId] = fwdId
+                    else setStatus(fwdId, MessageStatus.FAILED)
+                }
             }
         }
     }
+
+    private fun captionFallback(message: MessageResponse): String {
+        copyStringField(message, "filename")?.let { return it }
+        return mediaLabel(message.kind)
+    }
+
+    private fun copyStringField(message: MessageResponse, key: String): String? =
+        try { message.body[key]?.jsonPrimitive?.content } catch (_: Exception) { null }
+
+    private fun copyLongField(message: MessageResponse, key: String): Long? =
+        try { message.body[key]?.jsonPrimitive?.content?.toLongOrNull() } catch (_: Exception) { null }
+
+    private fun copyDoubleField(message: MessageResponse, key: String): Double? =
+        try { message.body[key]?.jsonPrimitive?.content?.toDoubleOrNull() } catch (_: Exception) { null }
 
     fun toggleStar(messageId: String) {
         // Optimistic UI first, then persist per room (star has no Ollacore API;
@@ -660,6 +748,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { container.chatPrefsStore.toggleStar(roomId, messageId) }
         }
     }
+
+    /**
+     * Batch star/unstar for the selection toolbar (WhatsApp semantics: star
+     * all unless every id is already starred). ONE state update + ONE store
+     * write — the old per-item toggle loop issued N concurrent
+     * read-modify-writes that could clobber each other and left mixed
+     * selections looking unchanged.
+     */
+    fun setStars(messageIds: List<String>, starred: Boolean) {
+        if (messageIds.isEmpty()) return
+        _uiState.update {
+            val starredSet = it.starredIds.toMutableSet()
+            if (starred) starredSet.addAll(messageIds) else starredSet.removeAll(messageIds.toSet())
+            it.copy(starredIds = starredSet)
+        }
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.setStarred(roomId, messageIds, starred) }
+        }
+    }
+
+    fun togglePin(messageId: String) {
+        // Message-level pin (CLIENT-ONLY, same DataStore pattern as star).
+        _uiState.update {
+            val pinned = it.pinnedIds.toMutableSet()
+            if (messageId in pinned) pinned.remove(messageId) else pinned.add(messageId)
+            it.copy(pinnedIds = pinned)
+        }
+        viewModelScope.launch {
+            runCatching { container.chatPrefsStore.togglePinnedMessage(roomId, messageId) }
+        }
+    }
+
+    fun isPinned(messageId: String): Boolean = messageId in _uiState.value.pinnedIds
 
     fun toggleSelect(messageId: String) {
         _uiState.update {
@@ -1088,7 +1209,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val requestId = chatWebSocket?.sendMessage(roomId, clientMessageId, body, kind = kind, replyTo = replyTo, attachmentIds = attachmentIds)
             if (requestId != null) requestToClient[requestId] = clientMessageId
-            else setStatus(clientMessageId, MessageStatus.FAILED)
+            else {
+                // Dead socket: FAILED alone is keyed by an id no bubble shows
+                // (forwards/retries have no optimistic row), so the tap looked
+                // like nothing happened. Surface a dismissible banner instead.
+                setStatus(clientMessageId, MessageStatus.FAILED)
+                _uiState.update { it.copy(error = "Not connected — message not sent") }
+            }
         }
     }
 
@@ -1123,8 +1250,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Persist receipt facts (SENT/DELIVERED/READ only; SENDING/FAILED are
         // transient) so ticks survive restarts without conflicting live state.
+        // Room is authoritative; the legacy DataStore write stays one release
+        // as a fallback for installs that predate Room.
         if (changed && status.rank in 1..3) {
             viewModelScope.launch {
+                runCatching { chatRepo.updateLocalStatus(key, status.rank) }
                 runCatching { statusStore.upsert(key, status.rank) }
             }
         }
@@ -1272,11 +1402,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(uploadError = null, isUploading = false, uploadProgress = 0f, uploadingFilename = null) }
     }
 
-    // ── Voice recorder (spec 13): tap mic -> live bar -> send as audio file ──
-    // No voice_note backend exists, and message kind "audio" is rejected with
-    // 400 "unsupported message kind audio" (proven 2026-09-24), so recordings
-    // travel as kind=file with audio mime + duration_ms + waveform body fields
-    // (server passes body through; bubbles key off the audio/* MIME).
+    // ── Voice recorder (spec 13): tap mic -> live bar -> send as kind=voice_note ──
+    // Dedicated voice-note classification with audio mime + duration_ms + waveform
+    // body fields (server passes body through; bubbles key off kind + audio/* MIME).
 
     private var recorder: android.media.MediaRecorder? = null
     private var recordFile: File? = null
@@ -1397,11 +1525,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { com.ollacore.app.data.util.MimeValidator.ensureM4aBrand(file) }
         }
         // Verified sendable: real file, non-zero bytes, audible length.
-        // kind=file (NOT audio): the server rejects message kind "audio" with
-        // 400 "unsupported message kind audio" (proven via API). The bubble
-        // still renders the voice player: rendering keys off the audio/* MIME.
+        // Dedicated kind=voice_note so voice notes classify correctly (text,
+        // search, and audio tabs distinguish them); rendering keys off the
+        // kind + audio/* MIME with duration_ms + waveform.
         if (file != null && file.exists() && file.length() > 1024 && duration > 500) {
-            uploadAndSendFile(file, "audio/mp4", com.ollacore.app.data.model.MessageKinds.FILE, "", duration, wave)
+            uploadAndSendFile(file, "audio/mp4", com.ollacore.app.data.model.MessageKinds.VOICE_NOTE, "", duration, wave)
         } else {
             file?.delete()
             if (file != null) {

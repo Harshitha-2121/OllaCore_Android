@@ -15,14 +15,18 @@ client-only storage. Everything else is a backend spec first.
   Chat/media        Archive          Status
   Groups            Mute             Channels
   Calls             Pin              Communities
-  E2EE              Call history     Polls
-  Push              App lock         Voice notes
+  TLS/WSS transit   Call history     Polls
+  Push*             App lock         Voice notes
   Contacts          Local settings   Video notes
   Devices           Unread/clear     Events
   Search (room)     Block (local*)   Privacy store
                                      Disappearing TTL
                                      Backup/restore
 ```
+
+* Push needs external config (google-services.json + backend sender); see
+  `PUSH-SETUP.md`. The app has no end-to-end encryption (MLS/E2EE): message
+  content is only protected in transit by TLS/WSS.
 
 * Block list needs a server filter to mean anything cross-device;
   client can hide locally as a stopgap (not yet built).
@@ -53,7 +57,7 @@ client-only storage. Everything else is a backend spec first.
 | Push tap routing | Existing | Done (`MainActivity`, push/) |
 | Linked devices | Existing | Done (`ui/devices/`) |
 | Global search + media tabs | Existing (fan-out) | Done (`ui/globalsearch/`) |
-| Security UX | Later | E2EE untouched |
+| Security UX | Later | No E2EE; transport protection (TLS/WSS) only |
 | Chat mgmt archive/mute/pin | Client-only | Not built (same DataStore pattern) |
 | App lock/PIN | Client-only | Not built (BiometricPrompt) |
 | Status / voice-note / video-note | Backend | Spec written, UI queued |

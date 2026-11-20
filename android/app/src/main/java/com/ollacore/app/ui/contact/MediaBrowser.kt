@@ -131,17 +131,15 @@ fun MediaBrowserScreen(
     uiState: MediaBrowserUiState,
     onBack: () -> Unit,
     onOpenImage: (String) -> Unit,
-    onOpenDocument: (String, String, String) -> Unit
+    onOpenDocument: (String, String, String) -> Unit,
+    onOpenVideo: (String) -> Unit = {}
 ) {
-    val context = LocalContext.current
     fun open(item: BrowserItem) {
         val url = item.url ?: return
         val mime = item.mime ?: ""
         when {
             item.kind.equals("image", ignoreCase = true) || mime.startsWith("image/") -> onOpenImage(url)
-            item.kind.equals("video", ignoreCase = true) || mime.startsWith("video/") -> runCatching {
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-            }
+            item.kind.equals("video", ignoreCase = true) || mime.startsWith("video/") -> onOpenVideo(url)
             else -> onOpenDocument(url, item.filename ?: "document", mime.ifBlank { "application/octet-stream" })
         }
     }

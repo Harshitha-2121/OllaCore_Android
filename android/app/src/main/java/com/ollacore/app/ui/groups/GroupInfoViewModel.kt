@@ -46,6 +46,9 @@ data class GroupInfoUiState(
     val memberOfLists: Set<String> = emptySet(),
     val events: List<com.ollacore.app.data.local.GroupEvent> = emptyList(),
     val selfId: String? = null,
+    // BUG-09: contacts-table names keyed by principal id — fills in real names
+    // when the roster endpoint only returns bare ids.
+    val contactNames: Map<String, String> = emptyMap(),
     val reportDone: Boolean = false,
     // Add-member workflow state.
     val addCandidates: List<com.ollacore.app.data.model.ContactUser> = emptyList(),
@@ -151,9 +154,24 @@ class GroupInfoViewModel(application: Application) : AndroidViewModel(applicatio
         val selfPhone = sessionStore.phone.first()
         chatRepo.getParticipants(token, roomId).onSuccess { resp ->
             val admin = isSelfAdmin(resp.participants, selfId, selfPhone)
+            // BUG-09: decorate the roster with local directory names so rows
+            // without server display_name render a real name instead of an id.
+            val directory = runCatching {
+                val dao = container.db.contactDao()
+                resp.participants.mapNotNull { p ->
+                    dao.get(p.principalId)?.let { c ->
+                        contactNameFrom(
+                            c.displayName, c.firstName, c.lastName,
+                            c.phone, c.normalizedPhone, c.username
+                        )?.let { name -> p.principalId to name }
+                    }
+                }.toMap()
+            }.getOrElse { emptyMap() }
             // selfId was previously never written to state ("You" never
             // showed and you-first sorting never applied); store it now.
-            _uiState.update { it.copy(members = resp.participants, isAdmin = admin, selfId = selfId) }
+            _uiState.update {
+                it.copy(members = resp.participants, isAdmin = admin, selfId = selfId, contactNames = directory)
+            }
         }.onFailure { e ->
             _uiState.update { it.copy(error = e.message) }
         }
@@ -220,14 +238,14 @@ class GroupInfoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun removeMember(principalId: String) {
-        val label = _uiState.value.members.find { it.principalId == principalId }
-            ?.let { it.displayName ?: it.phone } ?: principalId.take(8)
+        val m = _uiState.value.members.find { it.principalId == principalId }
+        val label = if (m != null) resolveMemberName(principalId, m.displayName, m.phone, _uiState.value.contactNames, "Member") else "Member"
         runMutation({ t, r -> chatRepo.removeMember(t, r, principalId) }, journal = "Member removed" to label)
     }
 
     fun setAdmin(principalId: String, admin: Boolean) {
-        val label = _uiState.value.members.find { it.principalId == principalId }
-            ?.let { it.displayName ?: it.phone } ?: principalId.take(8)
+        val m = _uiState.value.members.find { it.principalId == principalId }
+        val label = if (m != null) resolveMemberName(principalId, m.displayName, m.phone, _uiState.value.contactNames, "Member") else "Member"
         runMutation(
             { t, r -> chatRepo.setMemberRole(t, r, principalId, if (admin) "admin" else "member") },
             journal = (if (admin) "Made admin" else "Removed admin") to label
@@ -315,14 +333,12 @@ class GroupInfoViewModel(application: Application) : AndroidViewModel(applicatio
             runCatching {
                 chatRepo.listMessages(token, roomId, limit = 100).getOrThrow().messages
             }.onSuccess { messages ->
-                val names = _uiState.value.members.associate {
-                    it.principalId to (it.displayName?.ifBlank { null } ?: it.phone ?: it.principalId.take(8))
-                }
+                val directory = _uiState.value.contactNames
                 _uiState.update {
                     it.copy(starred = messages.filter { m -> m.id in ids }.map { m ->
                         GroupStarredMsg(
                             messageId = m.id,
-                            sender = names[m.senderId] ?: m.senderId.take(8),
+                            sender = resolveMemberName(m.senderId, null, null, directory, "Member"),
                             preview = com.ollacore.app.data.util.messagePreviewSnippet(m),
                             at = shortStamp(m.createdAt),
                             eventSeq = m.eventSeq
@@ -439,7 +455,9 @@ class GroupInfoViewModel(application: Application) : AndroidViewModel(applicatio
                 chatRepo.addMember(token, roomId, userId)
                     .onSuccess {
                         val label = _uiState.value.addCandidates.find { it.userId == userId }
-                            ?.displayName ?: userId.take(8)
+                            ?.displayName?.takeIf { it.isNotBlank() }
+                            ?: _uiState.value.contactNames[userId]?.takeIf { it.isNotBlank() }
+                            ?: "Member"
                         logEvent("Member added", label)
                     }
                     .onFailure { e -> failed[userId] = e.message ?: "Add failed" }
@@ -519,25 +537,76 @@ class GroupInfoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     companion object {
+        /**
+         * User-facing failure copy (DISCLOSURE-01): never echoes exception text,
+         * endpoint paths, or internal "backend check" jargon. Actionable short
+         * details (e.g. "Please check your connection…") are preserved by
+         * [friendlyError]; everything else collapses to the action + retry.
+         */
         fun backendHint(action: String, detail: String?): String {
-            return "$action${if (detail != null) ": $detail" else ""} (backend check required - confirm Ollacore group-mgmt endpoint)"
+            val friendly = com.ollacore.app.data.util.friendlyError(detail)
+            return if (friendly == "Something went wrong.") "$action. Please try again."
+            else "$action. $friendly"
         }
     }
 }
 
-/** Display name for a member row (never raw id when a name/phone exists). */
-fun memberDisplayName(m: Participant): String =
-    m.displayName?.takeIf { it.isNotBlank() } ?: m.phone?.takeIf { it.isNotBlank() } ?: m.principalId.take(8)
+/**
+ * Resolve a human display name for a member (BUG-09).
+ *
+ * The roster endpoint often returns bare principal IDs with no display_name;
+ * the contacts table (populated from the directory and phone imports) usually
+ * has the real name for the same user id. Resolution order:
+ *   server displayName → server phone → local directory → neutral fallback.
+ * A raw principal id is NEVER shown to the user; [fallback] labels the row
+ * honestly instead ("Group member"), matching how other messengers render an
+ * unknown-but-known-to-group participant before their profile resolves.
+ * Pure; unit-tested in GroupMembersTest.
+ */
+fun resolveMemberName(
+    principalId: String,
+    displayName: String?,
+    phone: String?,
+    directory: Map<String, String> = emptyMap(),
+    fallback: String = "Group member"
+): String {
+    displayName?.takeIf { it.isNotBlank() }?.let { return it }
+    phone?.takeIf { it.isNotBlank() }?.let { return it }
+    directory[principalId]?.let { if (it.isNotBlank()) return it }
+    return fallback
+}
+
+/** Best local-directory label for a contacts-table row, or null when it has nothing usable. */
+fun contactNameFrom(
+    displayName: String?,
+    firstName: String,
+    lastName: String,
+    phone: String,
+    normalizedPhone: String,
+    username: String?
+): String? {
+    displayName?.takeIf { it.isNotBlank() }?.let { return it }
+    val name = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ").trim()
+    if (name.isNotEmpty()) return name
+    phone.takeIf { it.isNotBlank() }?.let { return it }
+    normalizedPhone.takeIf { it.isNotBlank() }?.let { return it }
+    username?.takeIf { it.isNotBlank() }?.let { return it }
+    return null
+}
+
+/** Display name for a member row (never a raw id when a name/phone/directory entry exists). */
+fun memberDisplayName(m: Participant, directory: Map<String, String> = emptyMap()): String =
+    resolveMemberName(m.principalId, m.displayName, m.phone, directory)
 
 /** "You" / "Group admin" aware subtitle, reference row hierarchy. */
-fun memberSubtitle(m: Participant, selfId: String?): String {
+fun memberSubtitle(m: Participant, selfId: String?, directory: Map<String, String> = emptyMap()): String {
     val you = selfId != null && m.principalId == selfId
     val admin = m.role.equals("admin", ignoreCase = true)
     return when {
         you && admin -> "You · Group admin"
         you -> "You"
         admin -> "Group admin"
-        else -> m.phone?.takeIf { it.isNotBlank() } ?: m.principalId.take(8)
+        else -> resolveMemberName(m.principalId, m.displayName, m.phone, directory, fallback = "Member")
     }
 }
 
