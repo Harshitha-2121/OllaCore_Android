@@ -76,4 +76,45 @@ class GroupMembersTest {
             json.decodeFromString(ser, json.encodeToString(ser, original))
         assertEquals(original, restored)
     }
+
+    // ── BUG-09: never show bare hex principal ids ──
+
+    @Test
+    fun `id only member resolves to the directory name`() {
+        val idOnly = Participant("23c7f84b-9d2e-4a11-b0c2-1234567890ab", null, null, null)
+        val directory = mapOf("23c7f84b-9d2e-4a11-b0c2-1234567890ab" to "Akash")
+        assertEquals("Akash", memberDisplayName(idOnly, directory))
+        assertEquals("Akash", memberSubtitle(idOnly, null, directory))
+    }
+
+    @Test
+    fun `unresolvable member gets a neutral label, not a truncated id`() {
+        val idOnly = Participant("23c7f84b-9d2e-4a11-b0c2-1234567890ab", null, null, null)
+        assertEquals("Group member", memberDisplayName(idOnly))
+        assertEquals("Member", memberSubtitle(idOnly, null))
+        assertFalse(memberDisplayName(idOnly).contains("23c7"))
+        assertFalse(memberSubtitle(idOnly, null).contains("23c7"))
+    }
+
+    @Test
+    fun `server name then phone then directory precedence`() {
+        val named = Participant("u-ak", "member", "Akash S", null)
+        assertEquals("Akash S", memberDisplayName(named, mapOf("u-ak" to "Directory Name")))
+        val phoneOnly = Participant("u-ak", "member", null, "+1002")
+        assertEquals("+1002", memberDisplayName(phoneOnly, mapOf("u-ak" to "Directory Name")))
+        // Blank server fields never win over a real directory name.
+        val blank = Participant("u-ak", "member", "  ", null)
+        assertEquals("Directory Name", memberDisplayName(blank, mapOf("u-ak" to "Directory Name")))
+    }
+
+    @Test
+    fun `contact rows produce a human label in priority order`() {
+        assertEquals("Akash S", contactNameFrom("Akash S", "Akash", "S", "+1002", "+1002", null))
+        assertEquals("Akash S", contactNameFrom(null, "Akash", "S", "+1002", "+1002", null))
+        assertEquals("Akash", contactNameFrom(" ", "Akash", "", "+1002", "+1002", null))
+        assertEquals("+1002", contactNameFrom(null, "", "", "+1002", "+1002", null))
+        assertEquals("+1002", contactNameFrom(null, "", "", "", "+1002", null))
+        assertEquals("akash", contactNameFrom(null, "", "", "", "", "akash"))
+        assertNull(contactNameFrom(null, "", "", "", "", null))
+    }
 }

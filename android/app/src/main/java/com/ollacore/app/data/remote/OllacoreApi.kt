@@ -10,6 +10,12 @@ import java.util.concurrent.TimeUnit
 
 class OllacoreApi(
     private val apiBase: String = "https://api.ollacore.com/v1",
+    /**
+     * Public client identifier (BUG-08 / IDS-01). It ships inside every APK and
+     * is used only to bootstrap OTP requests; it must never be treated as a
+     * server-side secret or as access control. Kept as a default so builds can
+     * override it, but exposing it is not a vulnerability by itself.
+     */
     private val appId: String = "da_3a0a2cfaabd34b7dbfb4ecd5033b0c5f"
 ) {
     val baseUrl: String = apiBase

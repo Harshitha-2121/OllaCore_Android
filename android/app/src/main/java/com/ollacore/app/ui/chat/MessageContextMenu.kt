@@ -9,6 +9,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,6 +59,31 @@ enum class MenuActionId { REPLY, FORWARD, COPY, INFO, STAR, PIN, DELETE, MORE }
 
 /** Overflow entries behind "More...". */
 enum class MoreActionId { SELECT, EDIT }
+
+/**
+ * Pure dismissal policy for the popup surface (unit-tested): every selection
+ * path dismisses the popup, and so do scrim taps and Back. Expanding the
+ * extra-reaction row keeps it open; tapping the toggle while the row is
+ * expanded collapses-and-dismisses. Opening Info keeps the popup.
+ */
+enum class MenuSurfaceEvent {
+    ACTION_PICKED,
+    REACTION_EXPANDED,
+    REACTION_COLLAPSED,
+    INFO_OPENED,
+    SCRIM_TAPPED,
+    BACK_PRESSED
+}
+
+fun dismissMenuOn(event: MenuSurfaceEvent): Boolean = when (event) {
+    MenuSurfaceEvent.ACTION_PICKED,
+    MenuSurfaceEvent.REACTION_COLLAPSED,
+    MenuSurfaceEvent.SCRIM_TAPPED,
+    MenuSurfaceEvent.BACK_PRESSED -> true
+
+    MenuSurfaceEvent.REACTION_EXPANDED,
+    MenuSurfaceEvent.INFO_OPENED -> false
+}
 
 /** Reference reaction set + expandable extras for the "+" flow. */
 val CONTEXT_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏", "🥹")
@@ -168,25 +196,49 @@ fun MessageContextMenu(
     }
 
     Popup(
-        offset = offset,
         onDismissRequest = { close() },
         properties = PopupProperties(focusable = true)
     ) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(tween(180)) + scaleIn(tween(200), initialScale = 0.92f) +
-                slideInVertically(tween(200)) { it / 12 },
-            exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.95f)
+        // Full-screen scrim inside the popup window: taps outside the menu
+        // dismiss it, Back dismisses via focusable Popup + onDismissRequest,
+        // and the scrim never leaks taps to the composer underneath. The menu
+        // column is positioned with the same offset math that used to place
+        // the popup itself, so anchoring behavior is unchanged.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { if (dismissMenuOn(MenuSurfaceEvent.SCRIM_TAPPED)) close() }
+                )
+                .semantics { contentDescription = "Close message menu" }
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.width(260.dp)
+                modifier = Modifier
+                    .offset { offset }
+                    .width(260.dp)
             ) {
                 if (!isDeleted) {
                     ReactionBar(
-                        onReact = { emoji -> onReact(emoji); close() },
+                        onReact = { emoji ->
+                            // Attach the reaction to the selected message, then
+                            // close the popup. Never routes into the composer.
+                            onReact(emoji)
+                            close()
+                        },
                         showExtra = showExtraEmoji,
-                        onToggleExtra = { showExtraEmoji = !showExtraEmoji }
+                        onToggleExtra = {
+                            if (showExtraEmoji) {
+                                // Toggle dismiss: tapping the "more" button while
+                                // the extra row is open closes the overlay.
+                                showExtraEmoji = false
+                                close()
+                            } else {
+                                showExtraEmoji = true
+                            }
+                        }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -241,8 +293,14 @@ private fun ReactionBar(
                         emoji,
                         fontSize = 26.sp,
                         modifier = Modifier
-                            .clickable(onClick = { onReact(emoji) })
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { onReact(emoji) }
+                            )
+                            .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
                             .padding(horizontal = 4.dp)
+                            .semantics { contentDescription = "React with $emoji" }
                     )
                 }
                 Box(
@@ -274,8 +332,14 @@ private fun ReactionBar(
                             emoji,
                             fontSize = 24.sp,
                             modifier = Modifier
-                                .clickable(onClick = { onReact(emoji) })
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = { onReact(emoji) }
+                                )
+                                .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
                                 .padding(horizontal = 4.dp)
+                                .semantics { contentDescription = "React with $emoji" }
                         )
                     }
                 }

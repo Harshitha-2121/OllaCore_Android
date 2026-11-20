@@ -292,11 +292,11 @@ fun ContactInfoScreen(
             }
             HorizontalDivider()
 
-            // ── Encryption ──
+            // ── Message protection (transport only; no E2EE) ──
             OptionRow(
                 icon = Icons.Default.Lock,
-                title = "Encryption",
-                subtitle = "Messages are end-to-end encrypted. Click to verify.",
+                title = "Message protection",
+                subtitle = "Messages are transport-protected (TLS/WSS). No end-to-end encryption enabled.",
                 onClick = { showEncryption = true }
             )
             HorizontalDivider()
@@ -454,9 +454,9 @@ fun ContactInfoScreen(
     if (showEncryption) {
         AlertDialog(
             onDismissRequest = { showEncryption = false },
-            title = { Text("End-to-end encrypted") },
+            title = { Text("Transport protection") },
             text = {
-                Text("This chat uses MLS encryption with forward secrecy: removed members lose access to future messages, and each session rotation mints fresh epoch keys. Verify safety details with your contact out-of-band.")
+                Text("Messages are protected in transit via TLS/WSS. This app does not currently provide end-to-end encryption or forward secrecy guarantees.")
             },
             confirmButton = { TextButton(onClick = { showEncryption = false }) { Text("Close") } }
         )

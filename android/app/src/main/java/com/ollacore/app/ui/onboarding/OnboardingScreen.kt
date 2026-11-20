@@ -50,7 +50,7 @@ private val Pages = listOf(
     ),
     OnboardingPage(
         title = "Secure & Private",
-        subtitle = "Your conversations are protected with end-to-end encryption.",
+        subtitle = "Your conversations are protected in transit over TLS/WSS.",
         mainIcon = Icons.Default.Lock,
         chips = listOf(Icons.Default.VerifiedUser)
     ),

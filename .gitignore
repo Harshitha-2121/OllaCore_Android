@@ -11,6 +11,8 @@ build-*.log
 
 # Local QA artifacts (adb screenshots, uiautomator dumps, machine-specific helper scripts)
 qa/
+android_qa_audit/
+android_qa_audit.zip
 
 # OS
 .DS_Store

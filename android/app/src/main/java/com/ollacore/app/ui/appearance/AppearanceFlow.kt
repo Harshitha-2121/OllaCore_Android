@@ -4,7 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 
@@ -15,8 +15,10 @@ import androidx.compose.ui.Modifier
  */
 @Composable
 fun AppearanceFlow(onBack: () -> Unit, modifier: Modifier = Modifier) {
-    var screen by remember { mutableStateOf("main") }
-    BackHandler(enabled = screen != "main") { screen = "main" }
+    var screen by rememberSaveable { mutableStateOf("main") }
+    BackHandler(enabled = screen != "main") {
+        screen = if (screen == "bubble" || screen == "wallpaper") "theme" else "main"
+    }
     when (screen) {
         "theme" -> ChatThemeScreen(
             onBack = { screen = "main" },

@@ -97,6 +97,8 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.espresso.core)
 
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
     implementation(libs.kotlinx.serialization.json)

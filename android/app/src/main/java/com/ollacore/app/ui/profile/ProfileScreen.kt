@@ -191,8 +191,9 @@ fun ProfileScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
+                // BUG-07: never surface endpoint/file/line hints in user UI.
                 Text(
-                    text = "API: PATCH /v1/directory/me (display_name, about, avatar_url) -> OllacoreApi.kt:84",
+                    text = "Your name and about are visible to people you chat with.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

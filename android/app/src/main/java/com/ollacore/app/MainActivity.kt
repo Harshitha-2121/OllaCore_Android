@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -90,6 +91,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // BUG-11: refresh this handset's push registration for an existing
+        // session. Safe no-op when google-services.json is not in the build
+        // (the Linked Devices screen explains that state honestly).
+        lifecycleScope.launch {
+            runCatching {
+                (application as OllacoreApp).container.pushRegistrationManager.registerIfNeeded()
+            }
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -359,7 +368,7 @@ fun OllacoreNavHost() {
                     // service lands: intro explains, then real group flow.
                     navController.navigate("communityIntro")
                 },
-                onSettings = { navController.navigate("settings") },
+                onSettings = { navController.navigate("settings") { launchSingleTop = true } },
                 archivedRooms = archivedRooms,
                 selectedIds = selectedChatIds,
                 pinnedRooms = pinnedRooms,
@@ -394,12 +403,21 @@ fun OllacoreNavHost() {
         }
 
         composable("settings") {
+            val app = LocalContext.current.applicationContext as OllacoreApp
+            val session = app.container.sessionStore
+            val profileName by session.displayName.collectAsState(initial = authState.displayName)
+            val profileAbout by session.about.collectAsState(initial = authState.about)
+            val profileAvatar by session.avatarUrl.collectAsState(initial = authState.avatarUrl)
             com.ollacore.app.ui.settings.SettingsRoot(
-                onProfile = { navController.navigate("profile") },
-                onDevices = { navController.navigate("devices") },
-                onPrivacy = { navController.navigate("privacy") },
-                onNotifications = { navController.navigate("notifSettings") },
-                onBack = { navController.popBackStack() }
+                onProfile = { navController.navigate("profile") { launchSingleTop = true } },
+                onDevices = { navController.navigate("devices") { launchSingleTop = true } },
+                onPrivacy = { navController.navigate("privacy") { launchSingleTop = true } },
+                onNotifications = { navController.navigate("notifSettings") { launchSingleTop = true } },
+                onBack = { navController.popBackStack() },
+                displayName = profileName,
+                about = profileAbout,
+                avatarUrl = profileAvatar,
+                profileLoading = authState.isLoading
             )
         }
 

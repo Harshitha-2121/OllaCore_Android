@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.ollacore.app.data.model.MessageKinds
 import com.ollacore.app.data.model.MessageResponse
+import com.ollacore.app.ui.common.friendlyError
 import com.ollacore.app.ui.theme.BrandAvatar
 import com.ollacore.app.ui.theme.BubbleRadiusOwn
 import com.ollacore.app.ui.theme.BubbleRadiusPeer
@@ -534,7 +535,7 @@ fun ChatScreen(
                             Icon(Icons.Default.CloudOff, contentDescription = "Disconnected", tint = MaterialTheme.colorScheme.error, modifier = Modifier.padding(end = 4.dp))
                         }
                         if (uiState.isEncrypted) {
-                            Icon(Icons.Default.Lock, contentDescription = "Encrypted", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 8.dp))
+                            Icon(Icons.Default.Lock, contentDescription = "Transport protected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 8.dp))
                         }
                     }
                 }
@@ -561,7 +562,10 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            uiState.error,
+                            // DISCLOSURE-01: raw API/exception detail stays out
+                            // of the inline banner (friendlyError passes harmless
+                            // short messages through unchanged).
+                            friendlyError(uiState.error),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                             modifier = Modifier.weight(1f)
@@ -639,11 +643,11 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                // Centered encryption notice (WhatsApp-style system bubble, real info).
+                // Centered notice (honest about protection level).
                 item(key = "sys-e2ee") {
                     SystemNoticeChip(
-                        text = if (uiState.isEncrypted) "🔒 Messages are end-to-end encrypted."
-                        else "Messages appear here.",
+                        text = if (uiState.isEncrypted) "🔒 Transport-protected messages (TLS/WSS). No end-to-end encryption enabled."
+                        else "Messages appear here (transport-protected).",
                         icon = Icons.Default.Lock
                     )
                 }

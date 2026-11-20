@@ -17,6 +17,8 @@ import com.ollacore.app.data.remote.ChatWebSocket
 import com.ollacore.app.data.remote.WebSocketEvent
 import com.ollacore.app.data.remote.WsMessage
 import com.ollacore.app.ui.call.CallRinger
+import com.ollacore.app.ui.groups.contactNameFrom
+import com.ollacore.app.ui.groups.resolveMemberName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -320,8 +322,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     setStatus(msg.id, MessageStatus.SENT)
                     pendingPayloads.remove(msg.clientMessageId)
                 }
-                _uiState.update {
-                    it.copy(messages = it.messages + response)
+                // Duplicate suppression (BUG-02): a repeated/late message.created
+                // frame replaces the row in place instead of appending a twin.
+                _uiState.update { state ->
+                    state.copy(messages = mergeIncomingMessage(state.messages, response))
                 }
                 // Prefetch download URLs for new media messages (Ollacore API: GET /rooms/{id}/attachments/{aid}/download)
                 attachmentRefIds(response).forEach { aid -> resolveAttachmentUrl(aid, auto = true) }
@@ -488,8 +492,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             chatRepo.getParticipants(roomToken, roomId)
                 .onSuccess { resp ->
+                    // BUG-09: rosters often carry bare principal ids. Fill in the
+                    // real name from the local contacts table (same identity key),
+                    // then fall back to a neutral label — never a truncated id.
+                    val directory = runCatching {
+                        val dao = container.db.contactDao()
+                        resp.participants.mapNotNull { p ->
+                            dao.get(p.principalId)?.let { c ->
+                                contactNameFrom(
+                                    c.displayName, c.firstName, c.lastName,
+                                    c.phone, c.normalizedPhone, c.username
+                                )?.let { name -> p.principalId to name }
+                            }
+                        }.toMap()
+                    }.getOrElse { emptyMap() }
                     val names = resp.participants.associate { p ->
-                        p.principalId to (p.displayName ?: p.phone ?: p.principalId.take(8))
+                        p.principalId to resolveMemberName(p.principalId, p.displayName, p.phone, directory)
                     }
                     val phones = resp.participants.associate { p ->
                         p.principalId to (p.phone ?: "")
@@ -544,7 +562,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     val liveIds = response.messages.map { it.id }.toSet()
                     it.copy(
-                        messages = applyLocalViewFilter(response.messages.sortedBy { m -> m.eventSeq }),
+                        // Server history is authoritative for a full reload, but
+                        // normalize duplicates (defensive: an overlapping
+                        // page/sync must never render the same row twice).
+                        messages = applyLocalViewFilter(
+                            dedupeById(response.messages.sortedBy { m -> m.eventSeq })
+                        ),
                         isLoading = false,
                         error = null,
                         messageStatus = seeded,

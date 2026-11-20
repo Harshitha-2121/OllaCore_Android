@@ -57,6 +57,11 @@ class AppContainer(private val context: Context) {
     val e2eeManager = E2eeManager(api)
     val forwardSecrecyManager = ForwardSecrecyManager()
     val pushConfigManager = PushConfigManager()
+    // BUG-11: FCM token -> backend device registration. Degrades to a no-op
+    // until google-services.json is added (see PushRegistrationManager KDoc).
+    val pushRegistrationManager = com.ollacore.app.push.PushRegistrationManager(
+        context, directoryRepository, sessionStore
+    )
 
     // App-scoped WebSocket signaling for 1-to-1 WebRTC calls (server lives in
     // android/signaling). Disabled (empty URL) until signalingUrl is configured;

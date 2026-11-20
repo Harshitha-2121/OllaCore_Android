@@ -55,6 +55,8 @@ fun friendlyError(raw: String?): String {
     val lower = raw.lowercase()
     if ("404" in lower || "not found" in lower) return "This is not available yet on the server."
     if ("429" in lower || "rate" in lower) return "Too many tries. Please wait a moment."
-    if (raw.length > 140) return "Something went wrong. Please try again."
+    if ("ollacoreapi.kt" in lower || "api:" in lower || lower.contains("exception") || raw.length > 140) {
+        return "Something went wrong. Please try again."
+    }
     return raw
 }

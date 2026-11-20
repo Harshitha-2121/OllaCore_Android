@@ -24,6 +24,24 @@ sealed interface ReadAllState {
     data class Done(val marked: Int, val failed: Int) : ReadAllState
 }
 
+/**
+ * Chat-list duplicate suppression (BUG-02). The inbox endpoint can repeat a
+ * conversation (e.g. paging/refresh race). Identity is room_id ONLY — two
+ * distinct groups can legitimately share a name, so names are never used to
+ * merge rows. First-seen position is preserved; when the same room appears
+ * twice, the row with the newest last_message event_seq wins so the preview
+ * and unread badge are the freshest. Pure; unit-tested in HomeInboxTest.
+ */
+fun dedupeInboxByRoom(items: List<InboxItem>): List<InboxItem> {
+    fun seq(item: InboxItem): Int = item.lastMessage?.eventSeq ?: -1
+    val order = LinkedHashMap<String, InboxItem>(items.size * 2)
+    for (item in items) {
+        val prev = order[item.roomId]
+        if (prev == null || seq(item) >= seq(prev)) order[item.roomId] = item
+    }
+    return ArrayList(order.values)
+}
+
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val container = (application as OllacoreApp).container
     private val directoryRepo = container.directoryRepository
@@ -100,7 +118,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             directoryRepo.getInbox(token)
                 .onSuccess { response ->
                     _uiState.update {
-                        it.copy(inbox = response.conversations, isLoading = false)
+                        it.copy(inbox = dedupeInboxByRoom(response.conversations), isLoading = false)
                     }
                 }
                 .onFailure { e ->

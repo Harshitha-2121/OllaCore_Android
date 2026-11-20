@@ -30,7 +30,10 @@ class OllacoreFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        // Token will be registered when user logs in
+        // BUG-11: persist rotation + refresh the backend registration. The
+        // manager no-ops when Firebase is not configured / user is logged out.
+        val app = application as? com.ollacore.app.OllacoreApp ?: return
+        scope.launch { app.container.pushRegistrationManager.onNewToken(token) }
     }
 
     override fun onMessageReceived(message: RemoteMessage) {

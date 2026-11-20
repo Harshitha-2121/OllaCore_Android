@@ -6,6 +6,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.security.SecureRandom
 
+/**
+ * Tracks epoch/member bookkeeping for the (not implemented) MLS layer.
+ *
+ * HONEST SCOPE: despite the name, this class performs NO cryptography and
+ * provides NO forward-secrecy guarantee. It counts rotations and remembers
+ * which members were present per epoch; nothing here derives, ratchets, or
+ * destroys key material. Messages are protected in transit by TLS/WSS only.
+ * This exists so a real MLS engine can plug in later without changing callers.
+ */
 class ForwardSecrecyManager {
 
     private val _sessionState = MutableStateFlow(ForwardSecrecyState())

@@ -85,4 +85,21 @@ class ErrorMessagesTest {
         assertEquals("Something went wrong. Please try again.", friendlyError(long))
         assertEquals("Room is gone", friendlyError("Room is gone"))
     }
+
+    // BUG-07: endpoint/file/line hints from the edit-profile dialog (and any
+    // other internal trace) must never be shown to end users.
+    @Test
+    fun `internal api and exception hints never reach the user`() {
+        listOf(
+            "API: PATCH /v1/directory/me (display_name, about, avatar_url) -> OllacoreApi.kt:84",
+            "OllacoreApi.kt:84 updateProfile failed",
+            "java.lang.IllegalStateException: boom"
+        ).forEach { raw ->
+            val shown = friendlyError(raw)
+            assertFalse("leaked API hint: $shown", shown.contains("OllacoreApi.kt"))
+            assertFalse("leaked endpoint path: $shown", shown.contains("/v1/directory"))
+            assertFalse("leaked exception: $shown", shown.contains("Exception"))
+            assertTrue("should be generic copy: $shown", shown.startsWith("Something went wrong"))
+        }
+    }
 }
